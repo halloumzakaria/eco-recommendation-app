@@ -26,10 +26,7 @@ RUN npm run build
 
 # Install Python dependencies for NLP
 WORKDIR /app/backend/nlp_api
-RUN python3 -m venv venv && \
-    . venv/bin/activate && \
-    pip install --upgrade pip && \
-    pip install -r requirements.txt
+RUN pip3 install --break-system-packages -r requirements.txt
 
 # Go back to app root
 WORKDIR /app
