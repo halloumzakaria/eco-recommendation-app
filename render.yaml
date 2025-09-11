@@ -1,0 +1,39 @@
+services:
+  - type: web
+    name: ecosphere-frontend
+    env: docker
+    dockerfilePath: ./frontend/Dockerfile
+    envVars:
+      - key: REACT_APP_API_URL
+        value: https://ecosphere-backend.onrender.com/api
+      - key: REACT_APP_NLP_API_URL
+        value: https://ecosphere-nlp.onrender.com
+
+  - type: web
+    name: ecosphere-backend
+    env: docker
+    dockerfilePath: ./backend/Dockerfile
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: ecosphere-db
+          property: connectionString
+      - key: SECRET_KEY
+        generateValue: true
+      - key: NODE_ENV
+        value: production
+
+  - type: web
+    name: ecosphere-nlp
+    env: docker
+    dockerfilePath: ./backend/nlp_api/Dockerfile
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: ecosphere-db
+          property: connectionString
+
+databases:
+  - name: ecosphere-db
+    databaseName: eco_recommendation
+    user: postgres

@@ -1,0 +1,54 @@
+{
+  "name": "ecosphere-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "proxy": "http://eco-backend:5000",
+  "dependencies": {
+    "@emotion/react": "^11.14.0",
+    "@emotion/styled": "^11.14.0",
+    "@mui/icons-material": "^6.4.3",
+    "@mui/material": "^6.4.3",
+    "axios": "^1.7.9",
+    "cra-template": "1.2.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-router-dom": "^6.29.0",
+    "react-scripts": "5.0.1",
+    "web-vitals": "^5.0.1"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^6.1.4",
+    "@testing-library/react": "^14.1.2",
+    "@testing-library/user-event": "^14.5.1",
+    "jest-environment-jsdom": "^29.7.0"
+  },
+  "scripts": {
+    "start": "react-scripts start",
+    "build": "react-scripts build",
+    "test": "react-scripts test",
+    "eject": "react-scripts eject"
+  },
+  "eslintConfig": {
+    "extends": [
+      "react-app",
+      "react-app/jest"
+    ]
+  },
+  "browserslist": {
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version",
+      "last 1 firefox version",
+      "last 1 safari version"
+    ]
+  },
+  "description": "Ecosphere - Sustainable Shopping Made Simple. Discover eco-friendly products and make environmentally conscious choices.",
+  "main": "postcss.config.js",
+  "keywords": ["eco-friendly", "sustainable", "green products", "environmental", "shopping", "recommendations"],
+  "author": "Ecosphere Team",
+  "license": "MIT"
+}

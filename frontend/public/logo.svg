@@ -1,0 +1,30 @@
+<svg width="200" height="200" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background Circle -->
+  <circle cx="100" cy="100" r="95" fill="url(#gradient1)" stroke="#2e7d32" stroke-width="2"/>
+  
+  <!-- Inner Circle -->
+  <circle cx="100" cy="100" r="75" fill="none" stroke="#4caf50" stroke-width="3" opacity="0.8"/>
+  
+  <!-- Leaf 1 -->
+  <path d="M100 30 Q120 50 100 70 Q80 50 100 30" fill="#2e7d32"/>
+  
+  <!-- Leaf 2 -->
+  <path d="M100 130 Q80 150 100 170 Q120 150 100 130" fill="#2e7d32"/>
+  
+  <!-- Leaf 3 -->
+  <path d="M30 100 Q50 80 70 100 Q50 120 30 100" fill="#2e7d32"/>
+  
+  <!-- Leaf 4 -->
+  <path d="M170 100 Q150 120 130 100 Q150 80 170 100" fill="#2e7d32"/>
+  
+  <!-- Center E -->
+  <text x="100" y="115" font-family="Arial, sans-serif" font-size="60" font-weight="bold" text-anchor="middle" fill="white">E</text>
+  
+  <!-- Gradient Definition -->
+  <defs>
+    <linearGradient id="gradient1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#2e7d32;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#4caf50;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+</svg>

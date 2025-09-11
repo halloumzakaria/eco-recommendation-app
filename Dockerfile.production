@@ -1,0 +1,60 @@
+# Production Dockerfile for Eco-Recommendation
+FROM node:18-alpine AS base
+
+# Install system dependencies
+RUN apk add --no-cache python3 py3-pip postgresql-client
+
+# Frontend build stage
+FROM base AS frontend-builder
+WORKDIR /app/frontend
+COPY frontend/package*.json ./
+RUN npm ci --only=production
+COPY frontend/ ./
+RUN npm run build
+
+# Backend build stage
+FROM base AS backend-builder
+WORKDIR /app/backend
+COPY backend/package*.json ./
+RUN npm ci --only=production
+COPY backend/ ./
+
+# NLP API build stage
+FROM base AS nlp-builder
+WORKDIR /app/nlp
+COPY backend/nlp_api/requirements.txt ./
+RUN pip3 install --no-cache-dir -r requirements.txt
+COPY backend/nlp_api/ ./
+
+# Production stage
+FROM base AS production
+WORKDIR /app
+
+# Install serve for frontend
+RUN npm install -g serve
+
+# Copy built applications
+COPY --from=frontend-builder /app/frontend/build ./frontend/build
+COPY --from=backend-builder /app/backend ./backend
+COPY --from=nlp-builder /app/nlp ./nlp
+
+# Copy configuration files
+COPY docker-compose.yml ./
+COPY start.sh ./
+RUN chmod +x start.sh
+
+# Create non-root user
+RUN addgroup -g 1001 -S nodejs
+RUN adduser -S nextjs -u 1001
+USER nextjs
+
+# Expose ports
+EXPOSE 3000 5000 5001
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD curl -f http://localhost:3000 || exit 1
+
+# Start the application
+CMD ["./start.sh"]
+

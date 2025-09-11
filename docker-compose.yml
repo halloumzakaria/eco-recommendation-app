@@ -1,0 +1,75 @@
+services:
+  postgres:
+    image: postgres:14-alpine
+    container_name: eco-postgres
+    restart: always
+    environment:
+      POSTGRES_DB: eco_recommendation
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"
+    networks:
+      - eco-network
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: eco-backend
+    restart: on-failure
+    env_file:
+      - ./backend/.env
+    ports:
+      - "5000:5000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["./wait-for-it.sh", "eco-postgres:5432", "--", "npm", "start"]
+    networks:
+      - eco-network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        - REACT_APP_API_URL=http://172.26.242.240:5000/api
+        - REACT_APP_NLP_API_URL=http://172.26.242.240:5001
+    container_name: eco-frontend
+    restart: on-failure
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    networks:
+      - eco-network
+
+  nlp_api:
+    build:
+      context: ./backend/nlp_api
+      dockerfile: Dockerfile
+    container_name: eco-nlp
+    restart: on-failure
+    ports:
+      - "5001:5001"
+      - "5003:5003"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - eco-network
+
+volumes:
+  pgdata:
+
+networks:
+  eco-network:
+    driver: bridge
