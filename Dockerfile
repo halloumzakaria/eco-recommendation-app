@@ -7,23 +7,25 @@ WORKDIR /app
 # Install system dependencies
 RUN apk add --no-cache python3 py3-pip postgresql-client
 
-# Copy package files
+# Install serve globally
+RUN npm install -g serve
+
+# Copy and install backend dependencies
 COPY backend/package*.json ./backend/
-COPY frontend/package*.json ./frontend/
-
-# Install backend dependencies
 WORKDIR /app/backend
-RUN npm install
+RUN npm install --legacy-peer-deps
 
-# Install frontend dependencies
+# Copy and install frontend dependencies
+COPY frontend/package*.json ./frontend/
 WORKDIR /app/frontend
-RUN npm install
+RUN npm install --legacy-peer-deps
 
 # Copy source code
 COPY backend/ ./backend/
 COPY frontend/ ./frontend/
 
 # Build frontend
+WORKDIR /app/frontend
 RUN npm run build
 
 # Install Python dependencies for NLP
@@ -32,9 +34,6 @@ RUN pip3 install -r requirements.txt
 
 # Go back to app root
 WORKDIR /app
-
-# Install serve for frontend
-RUN npm install -g serve
 
 # Copy start script
 COPY start.sh ./
