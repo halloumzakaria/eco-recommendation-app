@@ -21,22 +21,31 @@ except:
 app = Flask(__name__)
 CORS(app)  # Activer les CORS pour permettre les requêtes externes
 
-# 🔹 Configuration PostgreSQL
-DB_NAME = "eco_recommendation"
-DB_USER = "postgres"
-DB_PASSWORD = "postgres"
-DB_HOST = "postgres"
-DB_PORT = "5432"
+# 🔹 Configuration PostgreSQL - Railway Environment
+import os
+
+DB_NAME = os.getenv("POSTGRES_DB", "eco_recommendation")
+DB_USER = os.getenv("POSTGRES_USER", "postgres")
+DB_PASSWORD = os.getenv("POSTGRES_PASSWORD", "postgres")
+DB_HOST = os.getenv("POSTGRES_HOST", "localhost")
+DB_PORT = os.getenv("POSTGRES_PORT", "5432")
 
 # 🔹 Connexion PostgreSQL
 def get_db_connection():
-    return psycopg2.connect(
-        dbname=DB_NAME,
-        user=DB_USER,
-        password=DB_PASSWORD,
-        host=DB_HOST,
-        port=DB_PORT
-    )
+    try:
+        return psycopg2.connect(
+            dbname=DB_NAME,
+            user=DB_USER,
+            password=DB_PASSWORD,
+            host=DB_HOST,
+            port=DB_PORT
+        )
+    except Exception as e:
+        print(f"❌ Database connection error: {e}")
+        # Fallback to Railway's DATABASE_URL if available
+        if os.getenv("DATABASE_URL"):
+            return psycopg2.connect(os.getenv("DATABASE_URL"))
+        raise e
 
 # 🤖 AI Search Engine Class
 class AISearchEngine:
