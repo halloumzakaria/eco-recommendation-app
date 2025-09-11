@@ -47,21 +47,24 @@ app.use((err, req, res, next) => {
 // Database connection and server start
 const startServer = async () => {
   try {
+    // Try to connect to database
     await sequelize.authenticate();
     console.log("✅ Database connection established successfully.");
     
     // Sync database models
     await sequelize.sync({ alter: true });
     console.log("✅ Database models synchronized.");
-    
-    app.listen(PORT, () => {
-      console.log(`🚀 Server running on port ${PORT}`);
-      console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
-    });
   } catch (error) {
-    console.error("❌ Unable to start server:", error);
-    process.exit(1);
+    console.error("⚠️  Database connection failed:", error.message);
+    console.log("🔄 Starting server without database (frontend only mode)");
   }
+  
+  // Start server regardless of database connection
+  app.listen(PORT, () => {
+    console.log(`🚀 Server running on port ${PORT}`);
+    console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
+    console.log(`📊 Database: ${process.env.DATABASE_URL ? '✅ Connected' : '❌ Not available'}`);
+  });
 };
 
 startServer();
