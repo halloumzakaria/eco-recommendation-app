@@ -29,14 +29,17 @@ app.get("/api/health", (req, res) => {
 app.use("/api/auth", authRoutes);
 app.use("/api/products", productRoutes);
 
-// Serve static files from frontend build
-if (process.env.NODE_ENV === "production") {
-  app.use(express.static(path.join(__dirname, "../frontend/build")));
-  
-  app.get("*", (req, res) => {
-    res.sendFile(path.join(__dirname, "../frontend/build", "index.html"));
-  });
-}
+// Serve static files from frontend build (always in Railway)
+app.use(express.static(path.join(__dirname, "../frontend/build")));
+
+// Handle React routing - return index.html for all non-API routes
+app.get("*", (req, res) => {
+  // Don't serve index.html for API routes
+  if (req.path.startsWith("/api/")) {
+    return res.status(404).json({ error: "API endpoint not found" });
+  }
+  res.sendFile(path.join(__dirname, "../frontend/build", "index.html"));
+});
 
 // Error handling middleware
 app.use((err, req, res, next) => {

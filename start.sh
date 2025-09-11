@@ -12,17 +12,8 @@ else
     echo "⚠️  No DATABASE_URL found, skipping NLP API"
 fi
 
-# Start Backend
-echo "🔧 Starting Backend..."
-cd /app/backend && npm start &
-sleep 3
+# Start Backend (which will serve both API and frontend)
+echo "🔧 Starting Backend with Frontend..."
+cd /app/backend && PORT=${PORT:-8080} npm start
 
-# Start Frontend
-echo "🌐 Starting Frontend..."
-cd /app && serve -s frontend/build -l ${PORT:-3000} &
-sleep 3
-
-echo "✅ All services started!"
-
-# Keep container running
-wait
+echo "✅ App started!"
