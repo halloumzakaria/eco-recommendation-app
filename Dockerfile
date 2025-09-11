@@ -10,22 +10,18 @@ RUN apk add --no-cache python3 py3-pip postgresql-client
 # Install serve globally
 RUN npm install -g serve
 
-# Copy and install backend dependencies
-COPY backend/package*.json ./backend/
+# Copy all source code first
+COPY . .
+
+# Install backend dependencies
 WORKDIR /app/backend
 RUN npm install --legacy-peer-deps
 
-# Copy and install frontend dependencies
-COPY frontend/package*.json ./frontend/
+# Install frontend dependencies
 WORKDIR /app/frontend
 RUN npm install --legacy-peer-deps
 
-# Copy source code
-COPY backend/ ./backend/
-COPY frontend/ ./frontend/
-
 # Build frontend
-WORKDIR /app/frontend
 RUN npm run build
 
 # Install Python dependencies for NLP
@@ -35,8 +31,7 @@ RUN pip3 install -r requirements.txt
 # Go back to app root
 WORKDIR /app
 
-# Copy start script
-COPY start.sh ./
+# Make start script executable
 RUN chmod +x start.sh
 
 # Expose port (Railway will set PORT env var)
