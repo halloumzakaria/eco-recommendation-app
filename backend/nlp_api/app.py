@@ -4,9 +4,6 @@ from textblob import TextBlob
 import psycopg2
 import json
 import re
-import numpy as np
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
 import nltk
 from nltk.corpus import stopwords
 from nltk.tokenize import word_tokenize
@@ -63,7 +60,9 @@ class AISearchEngine:
                 r'\b(hair|cheveux|shampoo|shampoing|brush|brosse|comb|peigne)\b',
                 r'\b(hair care|soin cheveux|hair products|produits cheveux)\b',
                 r'\b(something for my hair|quelque chose pour mes cheveux)\b',
-                r'\b(need.*hair|want.*hair|looking.*hair)\b'
+                r'\b(need.*hair|want.*hair|looking.*hair|for.*hair)\b',
+                r'\b(hair.*brush|brush.*hair|hair.*care|care.*hair)\b',
+                r'\b(bamboo.*hair|hair.*bamboo)\b'
             ],
             'oral_care': [
                 r'\b(teeth|dents|tooth|dent|toothbrush|brosse|toothpaste|dentifrice)\b',
@@ -157,35 +156,31 @@ class AISearchEngine:
             print(f"Error in detect_intent: {e}")
             return 'none', 0
     
-    def calculate_semantic_similarity(self, query, product_texts):
-        """Calculate semantic similarity using TF-IDF and cosine similarity"""
+    def calculate_simple_similarity(self, query, product_texts):
+        """Calculate simple text similarity without heavy dependencies"""
         if not product_texts:
             return []
         
-        # Preprocess all texts
-        processed_texts = [self.preprocess_text(text) for text in product_texts]
-        processed_query = self.preprocess_text(query)
+        processed_query = self.preprocess_text(query).split()
+        similarities = []
         
-        # Create TF-IDF vectors
-        all_texts = [processed_query] + processed_texts
-        vectorizer = TfidfVectorizer(
-            max_features=1000,
-            stop_words='english',
-            ngram_range=(1, 2),
-            min_df=1,
-            max_df=0.8
-        )
-        
-        try:
-            tfidf_matrix = vectorizer.fit_transform(all_texts)
-            query_vector = tfidf_matrix[0:1]
-            product_vectors = tfidf_matrix[1:]
+        for text in product_texts:
+            processed_text = self.preprocess_text(text).split()
             
-            # Calculate cosine similarities
-            similarities = cosine_similarity(query_vector, product_vectors).flatten()
-            return similarities
-        except:
-            return [0] * len(product_texts)
+            # Calculate Jaccard similarity
+            query_words = set(processed_query)
+            text_words = set(processed_text)
+            
+            if not query_words or not text_words:
+                similarities.append(0)
+                continue
+                
+            intersection = len(query_words.intersection(text_words))
+            union = len(query_words.union(text_words))
+            similarity = intersection / union if union > 0 else 0
+            similarities.append(similarity)
+        
+        return similarities
 
 # Initialize AI Search Engine
 ai_engine = AISearchEngine()
@@ -289,8 +284,8 @@ def ai_search():
         detected_intent, intent_confidence = ai_engine.detect_intent(query)
         print(f"�� Detected intent: {detected_intent} (confidence: {intent_confidence})")
 
-        # 2. Semantic Similarity using TF-IDF
-        semantic_scores = ai_engine.calculate_semantic_similarity(query, product_texts)
+        # 2. Simple Text Similarity
+        semantic_scores = ai_engine.calculate_simple_similarity(query, product_texts)
 
         # 3. Advanced Product Scoring
         results = []
@@ -305,8 +300,8 @@ def ai_search():
                 
                 if detected_intent == 'facial_care' and any(word in product_text for word in ['soap', 'savon', 'face', 'facial', 'skin', 'hygiene', 'cleanser', 'moisturizer']):
                     intent_score = 10
-                elif detected_intent == 'hair_care' and any(word in product_text for word in ['hair', 'cheveux', 'brush', 'brosse', 'shampoo']):
-                    intent_score = 8
+                elif detected_intent == 'hair_care' and any(word in product_text for word in ['hair', 'cheveux', 'brush', 'brosse', 'shampoo', 'bamboo']):
+                    intent_score = 10
                 elif detected_intent == 'oral_care' and any(word in product_text for word in ['teeth', 'dents', 'tooth', 'dent', 'toothbrush']):
                     intent_score = 8
                 elif detected_intent == 'kitchen' and any(word in product_text for word in ['kitchen', 'cuisine', 'utensil', 'cup', 'bottle']):
@@ -352,7 +347,7 @@ def ai_search():
                     facial_keywords = ['soap', 'savon', 'face', 'facial', 'skin', 'hygiene', 'cleanser', 'moisturizer', 'wash', 'clean']
                     is_relevant = any(keyword in product_text for keyword in facial_keywords)
                 elif detected_intent == 'hair_care':
-                    hair_keywords = ['hair', 'cheveux', 'brush', 'brosse', 'shampoo', 'comb', 'peigne']
+                    hair_keywords = ['hair', 'cheveux', 'brush', 'brosse', 'shampoo', 'comb', 'peigne', 'bamboo']
                     is_relevant = any(keyword in product_text for keyword in hair_keywords)
                 elif detected_intent == 'oral_care':
                     oral_keywords = ['teeth', 'dents', 'tooth', 'dent', 'toothbrush', 'toothpaste', 'dental']
@@ -386,6 +381,7 @@ def ai_search():
         results = results[:10]  # Limit to top 10 results
 
         print(f"✅ AI Search: Found {len(results)} results with intent '{detected_intent}'")
+        print(f"🔍 Top results: {[r['name'] for r in results[:3]]}")
         return jsonify({"results": results})
 
     except Exception as e:
