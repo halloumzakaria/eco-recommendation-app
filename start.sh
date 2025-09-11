@@ -2,7 +2,7 @@
 
 # Railway will provide PostgreSQL as a service
 # Start NLP API
-cd /app/backend/nlp_api && python3 app.py &
+cd /app/backend/nlp_api && . venv/bin/activate && python3 app.py &
 sleep 5
 
 # Start Backend
