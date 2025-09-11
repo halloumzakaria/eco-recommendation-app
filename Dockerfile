@@ -1,58 +1,47 @@
-# Multi-stage build for Ecosphere
-FROM node:18-alpine AS frontend-builder
-WORKDIR /app/frontend
-COPY frontend/package*.json ./
-RUN npm install
-COPY frontend/ ./
-RUN npm run build
-
-FROM node:18-alpine AS backend-builder
-WORKDIR /app/backend
-COPY backend/package*.json ./
-RUN npm install
-COPY backend/ ./
-
-FROM python:3.9-slim AS nlp-builder
-WORKDIR /app/nlp
-COPY backend/nlp_api/requirements.txt ./
-RUN pip install -r requirements.txt
-COPY backend/nlp_api/ ./
-
-FROM postgres:14-alpine AS postgres
-ENV POSTGRES_DB=eco_recommendation
-ENV POSTGRES_USER=postgres
-ENV POSTGRES_PASSWORD=postgres
-
-# Final production image
+# Railway-optimized Dockerfile for Eco-Recommendation App
 FROM node:18-alpine
+
+# Set working directory
 WORKDIR /app
 
-# Install Python for NLP API
-RUN apk add --no-cache python3 py3-pip
+# Install system dependencies
+RUN apk add --no-cache python3 py3-pip postgresql-client
 
-# Copy built frontend
-COPY --from=frontend-builder /app/frontend/build ./frontend/build
+# Copy package files
+COPY backend/package*.json ./backend/
+COPY frontend/package*.json ./frontend/
 
-# Copy backend
-COPY --from=backend-builder /app/backend ./backend
+# Install backend dependencies
+WORKDIR /app/backend
+RUN npm install
 
-# Copy NLP API
-COPY --from=nlp-builder /app/nlp ./nlp
+# Install frontend dependencies
+WORKDIR /app/frontend
+RUN npm install
+
+# Copy source code
+COPY backend/ ./backend/
+COPY frontend/ ./frontend/
+
+# Build frontend
+RUN npm run build
+
+# Install Python dependencies for NLP
+WORKDIR /app/backend/nlp_api
+RUN pip3 install -r requirements.txt
+
+# Go back to app root
+WORKDIR /app
 
 # Install serve for frontend
 RUN npm install -g serve
 
-# Install Python dependencies for NLP
-RUN pip3 install -r ./nlp/requirements.txt
-
-# Copy docker-compose and other configs
-COPY docker-compose.yml ./
-COPY railway.json ./
-
-# Expose ports
-EXPOSE 3000 5000 5001 5003 5432
-
-# Start script
+# Copy start script
 COPY start.sh ./
 RUN chmod +x start.sh
+
+# Expose port (Railway will set PORT env var)
+EXPOSE 3000
+
+# Start the application
 CMD ["./start.sh"]
