@@ -5,11 +5,9 @@ require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') }
 const fs = require('fs');
 const path = require('path');
 const csv = require('csv-parse/sync');
-const { Sequelize, DataTypes, QueryTypes } = require('sequelize');
+const { Sequelize, DataTypes, Op } = require('sequelize');
 
-/* -------------------------------------------------------
- * 1) DEBUG : afficher la base cible (host/port/db)
- * -----------------------------------------------------*/
+/* 1) Afficher la base cible */
 try {
   const u = new URL(process.env.DATABASE_URL);
   console.log('→ Import cible :', u.hostname, u.port || '(default)', u.pathname);
@@ -18,9 +16,7 @@ try {
   process.exit(1);
 }
 
-/* -------------------------------------------------------
- * 2) Connexion Sequelize (Railway public → SSL require)
- * -----------------------------------------------------*/
+/* 2) Connexion Sequelize (Railway => SSL) */
 const sequelize = new Sequelize(process.env.DATABASE_URL, {
   dialect: 'postgres',
   protocol: 'postgres',
@@ -28,128 +24,142 @@ const sequelize = new Sequelize(process.env.DATABASE_URL, {
   dialectOptions: { ssl: { require: true, rejectUnauthorized: false } },
 });
 
-/* -------------------------------------------------------
- * 3) Modèle aligné sur la table "Products"
- *    (selon \d "Products")
- * -----------------------------------------------------*/
+/* 3) Modèles minimaux alignés sur ton schéma */
+const Brand = sequelize.define(
+  'Brand',
+  {
+    id:   { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
+    name: { type: DataTypes.TEXT, allowNull: false, unique: true },
+  },
+  { tableName: 'brands', timestamps: false }
+);
+
+const Category = sequelize.define(
+  'Category',
+  {
+    id:   { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
+    name: { type: DataTypes.TEXT, allowNull: false, unique: true },
+  },
+  { tableName: 'categories', timestamps: false }
+);
+
 const Product = sequelize.define(
   'Product',
   {
-    name:        { type: DataTypes.STRING,  allowNull: false },
-    description: { type: DataTypes.TEXT,    allowNull: false },
-    price:       { type: DataTypes.DOUBLE,  allowNull: false },
-    category:    { type: DataTypes.STRING,  allowNull: false },
-    eco_rating:  { type: DataTypes.DOUBLE,  allowNull: false, defaultValue: 3 },
-    image_url:   { type: DataTypes.TEXT,    allowNull: false },
-    views:       { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
-
-    // colonnes optionnelles (NULL)
-    brand:          { type: DataTypes.TEXT, allowNull: true },
-    certifications: { type: DataTypes.TEXT, allowNull: true },
-    tags:           { type: DataTypes.TEXT, allowNull: true },
-    source_url:     { type: DataTypes.TEXT, allowNull: true },
+    id:          { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
+    name:        { type: DataTypes.TEXT, allowNull: false },
+    description: { type: DataTypes.TEXT },
+    price:       { type: DataTypes.DECIMAL(10, 2), allowNull: false },
+    stock:       { type: DataTypes.INTEGER, defaultValue: 0 },
+    eco_rating:  { type: DataTypes.DECIMAL(2, 1) },
+    eco_score:   { type: DataTypes.INTEGER },
+    co2_impact:  { type: DataTypes.DECIMAL(10, 3) },
+    material:    { type: DataTypes.TEXT },
+    made_in:     { type: DataTypes.TEXT },
+    image_url:   { type: DataTypes.ARRAY(DataTypes.TEXT) }, // <— tableau
+    category_id: { type: DataTypes.INTEGER },
+    brand_id:    { type: DataTypes.INTEGER },
+    seller_id:   { type: DataTypes.INTEGER },
+    // search_vector est géré côté DB via trigger
   },
   {
-    tableName: 'Products',
-    timestamps: true,            // utilise "createdAt" / "updatedAt"
-    underscored: false,          // garde le camelCase exact
+    tableName: 'products',
+    timestamps: true,
+    createdAt: 'created_at',
+    updatedAt: 'updated_at',
+    underscored: true,
   }
 );
 
-/* -------------------------------------------------------
- * 4) Helpers
- * -----------------------------------------------------*/
-const REQUIRED_COLS = [
-  'name', 'description', 'price', 'category', 'eco_rating', 'image_url', 'views',
-];
-const OPTIONAL_COLS = ['brand', 'certifications', 'tags', 'source_url'];
-
-async function ensureColumnsExist() {
-  const cols = await sequelize.query(
-    `SELECT column_name
-       FROM information_schema.columns
-      WHERE table_schema='public' AND table_name='Products';`,
-    { type: QueryTypes.SELECT }
-  );
-  const have = new Set(cols.map((c) => c.column_name));
-
-  const missingRequired = REQUIRED_COLS.filter((c) => !have.has(c));
-  if (missingRequired.length) {
-    throw new Error(
-      `Colonnes obligatoires manquantes dans "Products": ${missingRequired.join(', ')}`
-    );
-  }
-
-  const missingOptional = OPTIONAL_COLS.filter((c) => !have.has(c));
-  if (missingOptional.length) {
-    console.warn('⚠️ Colonnes optionnelles absentes (ignorées) :', missingOptional.join(', '));
-  }
-  return { have };
+/* 4) Helpers pour retrouver/créer brand & category */
+async function ensureBrandId(brandName) {
+  if (!brandName || !brandName.trim()) return null;
+  const name = brandName.trim();
+  const [b] = await Brand.findOrCreate({ where: { name } });
+  return b.id;
 }
 
-function pickDefaults(row, haveCols) {
-  const d = {
-    name:        (row.name || '').trim(),
-    description: row.description || '',
-    price:       parseFloat(row.price || '0'),
-    category:    row.category || 'misc',
-    eco_rating:  parseFloat(row.eco_rating || '3'),
-    image_url:   row.image_url || '',   // NOT NULL
-    views:       0,
-  };
-  if (haveCols.has('brand'))          d.brand = row.brand || null;
-  if (haveCols.has('certifications')) d.certifications = row.certifications || null;
-  if (haveCols.has('tags'))           d.tags = row.tags || null;
-  if (haveCols.has('source_url'))     d.source_url = row.source_url || null;
-  return d;
+async function ensureCategoryId(categoryName) {
+  if (!categoryName || !categoryName.trim()) return null;
+  const name = categoryName.trim();
+  const [c] = await Category.findOrCreate({ where: { name } });
+  return c.id;
 }
 
-/* -------------------------------------------------------
- * 5) Programme principal
- * -----------------------------------------------------*/
+function toImageArray(val) {
+  if (!val) return [];
+  if (Array.isArray(val)) return val;
+  const s = String(val).trim();
+  if (!s) return [];
+  // accepte “url1, url2 …” ou une seule url
+  return s.split(',').map(x => x.trim()).filter(Boolean);
+}
+
+/* 5) Programme principal */
 (async () => {
   try {
     await sequelize.authenticate();
     console.log('✅ DB connection OK');
 
-    const { have } = await ensureColumnsExist();
-
-    const file = path.join(__dirname, 'products_bulk.csv');
-    if (!fs.existsSync(file)) {
-      console.error(`❌ Fichier CSV introuvable : ${file}`);
+    const csvPath = path.join(__dirname, 'products_bulk.csv');
+    if (!fs.existsSync(csvPath)) {
+      console.error(`❌ Fichier CSV introuvable : ${csvPath}`);
       process.exit(1);
     }
-    const content = fs.readFileSync(file, 'utf8');
+
+    const content = fs.readFileSync(csvPath, 'utf8');
     const rows = csv.parse(content, { columns: true, skip_empty_lines: true });
 
-    let createdCount = 0, updatedCount = 0, skipped = 0;
+    let created = 0, updated = 0, skipped = 0;
 
     for (const r of rows) {
       const name = (r.name || '').trim();
       if (!name) { skipped++; continue; }
 
-      const where = (r.brand && r.brand.trim())
-        ? { name, brand: r.brand.trim() }
-        : { name };
+      // Colonnes CSV attendues (toutes optionnelles sauf name/price) :
+      // name, description, price, category, brand, eco_rating, eco_score, co2_impact,
+      // material, made_in, image_url (une URL ou “url1, url2”), stock
+      const price = r.price != null ? String(r.price).replace(',', '.') : '0';
+      const eco_rating = r.eco_rating != null ? String(r.eco_rating).replace(',', '.') : null;
+      const co2_impact = r.co2_impact != null ? String(r.co2_impact).replace(',', '.') : null;
 
-      const defaults = pickDefaults(r, have);
+      // Résoudre brand/category → id (création si besoin)
+      const brand_id = await ensureBrandId(r.brand);
+      const category_id = await ensureCategoryId(r.category);
 
-      // On ne récupère que l'id pour éviter un RETURNING trop large
-      const [prod, created] = await Product.findOrCreate({
-        where,
-        defaults,
-        attributes: ['id'],
-      });
+      // image_url → tableau text[]
+      const imageArr = toImageArray(r.image_url);
 
-      if (created) {
-        createdCount++;
+      const payload = {
+        name,
+        description: r.description || '',
+        price,
+        stock: r.stock ? parseInt(r.stock, 10) : 0,
+        eco_rating,
+        eco_score: r.eco_score ? parseInt(r.eco_score, 10) : null,
+        co2_impact,
+        material: r.material || null,
+        made_in: r.made_in || null,
+        image_url: imageArr,
+        category_id,
+        brand_id,
+      };
+
+      // clef “logique” : (name + brand_id) si brand existe, sinon (name)
+      const where = brand_id ? { name, brand_id } : { name };
+
+      const existing = await Product.findOne({ where, attributes: ['id'] });
+
+      if (existing) {
+        await Product.update(payload, { where: { id: existing.id } });
+        updated++;
       } else {
-        await prod.update(defaults);
-        updatedCount++;
+        await Product.create(payload);
+        created++;
       }
     }
 
-    console.log(`✅ Import terminé : ${createdCount} créés, ${updatedCount} mis à jour, ${skipped} ignorés.`);
+    console.log(`✅ Import terminé : ${created} créés, ${updated} mis à jour, ${skipped} ignorés.`);
     await sequelize.close();
     process.exit(0);
   } catch (e) {
