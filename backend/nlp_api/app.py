@@ -1,16 +1,18 @@
+# backend/nlp_api/app.py
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from textblob import TextBlob
-import psycopg2
-import psycopg2.extras as pgextras
-import math
-import re
+import os, math, re, psycopg2, psycopg2.extras as pgextras
 import nltk
-import os
 from collections import Counter
 from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
 from nltk import word_tokenize, pos_tag
+
+# --- charge le .env DU DOSSIER nlp_api + éventuellement celui du parent
+from dotenv import load_dotenv
+load_dotenv(os.path.join(os.path.dirname(__file__), '.env'))
+load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
 
 # --- NLTK data ---
 try:
@@ -21,194 +23,199 @@ try:
 except Exception:
     pass
 
-# --- Flask + CORS ---
 app = Flask(__name__)
-CORS(app)
+CORS(app, resources={r"/*": {"origins": ["http://localhost:3000", "http://127.0.0.1:3000", "*"]}})
 
-# --- Config PostgreSQL ---
+# ---------- DB CONFIG ----------
 DB_NAME = os.getenv("POSTGRES_DB", "eco_recommendation")
 DB_USER = os.getenv("POSTGRES_USER", "postgres")
 DB_PASSWORD = os.getenv("POSTGRES_PASSWORD", "postgres")
 DB_HOST = os.getenv("POSTGRES_HOST", "localhost")
 DB_PORT = os.getenv("POSTGRES_PORT", "5432")
-DATABASE_URL = os.getenv("DATABASE_URL")  # Railway
+DATABASE_URL = os.getenv("DATABASE_URL")
 
-# Colonnes "souhaitées" si elles existent (détection dynamique)
-PREFERRED_PRODUCT_COLUMNS = [
-    "id", "name", "description", "category", "price", "eco_rating",
-    "brand", "materials", "certifications", "tags", "source_url"
-]
+print("🗄️  [nlp_api] DATABASE_URL present? ->", bool(DATABASE_URL))
 
 def get_db_connection():
-    """Connexion PostgreSQL (préfère DATABASE_URL si dispo, sinon variables séparées)."""
     try:
         if DATABASE_URL:
+            print("🔌 [nlp_api] Connecting with DATABASE_URL (Railway)…")
             return psycopg2.connect(DATABASE_URL)
+        print(f"🔌 [nlp_api] Connecting local {DB_HOST}:{DB_PORT}…")
         return psycopg2.connect(
             dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD,
             host=DB_HOST, port=DB_PORT
         )
     except Exception as e:
-        # Fallback si la tentative variables séparées échoue mais DATABASE_URL existe
-        if not DATABASE_URL:
-            print(f"❌ Database connection error: {e}")
-            raise
-        try:
-            return psycopg2.connect(DATABASE_URL)
-        except Exception as ee:
-            print(f"❌ Database connection error (DATABASE_URL): {ee}")
-            raise
+        print(f"❌ Database connection error: {e}")
+        raise
 
+# ---------- util DB ----------
 def get_table_columns(conn, table_name):
-    """Retourne l’ensemble des colonnes existantes pour la table."""
     with conn.cursor(cursor_factory=pgextras.DictCursor) as cur:
         cur.execute("""
             SELECT column_name
             FROM information_schema.columns
-            WHERE table_schema = 'public' AND table_name = %s;
-        """, (table_name,))
-        return {row["column_name"] for row in cur.fetchall()}
+            WHERE table_schema='public' AND table_name=%s;
+        """, (table_name.lower(),))
+        return {r["column_name"] for r in cur.fetchall()}
+
+def table_exists(conn, table_name):
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT EXISTS (
+              SELECT 1 FROM information_schema.tables
+              WHERE table_schema='public' AND table_name=%s
+            );
+        """, (table_name.lower(),))
+        return cur.fetchone()[0]
+
+PREFERRED_PRODUCT_COLUMNS = [
+    "id","name","description","price","eco_rating",
+    "category_id","brand_id","image_url","source_url","tags","materials","certifications"
+]
+
 
 def select_products(conn, wanted=PREFERRED_PRODUCT_COLUMNS, extra_where=None, params=()):
-    """Sélectionne dynamiquement les colonnes disponibles parmi 'wanted'."""
-    available = get_table_columns(conn, "Products")
-    cols = [c for c in wanted if c in available]
+    # base table + available columns
+    pcols = get_table_columns(conn, "products")
+    cols = [c for c in wanted if c in pcols]
     if "id" not in cols:
         cols.insert(0, "id")
-    col_sql = ", ".join([f'"{c}"' for c in cols])
-    sql = f'SELECT {col_sql} FROM "Products"'
+
+    # detect optional joins
+    have_categories = table_exists(conn, "categories") and {"id","name"} <= get_table_columns(conn, "categories")
+    have_brands     = table_exists(conn, "brands") and {"id","name"} <= get_table_columns(conn, "brands")
+
+    # build SELECT list (include alias for readable names)
+    select_list = [f'p."{c}"' for c in cols]
+    if have_categories and "category_id" in pcols:
+        select_list.append('c.name AS category')
+    if have_brands and "brand_id" in pcols:
+        select_list.append('b.name AS brand')
+
+    sql = f'SELECT {", ".join(select_list)} FROM "products" p'
+    if have_categories and "category_id" in pcols:
+        sql += ' LEFT JOIN "categories" c ON p."category_id" = c."id"'
+    if have_brands and "brand_id" in pcols:
+        sql += ' LEFT JOIN "brands" b ON p."brand_id" = b."id"'
+
     if extra_where:
+        # extra_where should already start with WHERE/AND
         sql += " " + extra_where
+
     with conn.cursor(cursor_factory=pgextras.DictCursor) as cur:
         cur.execute(sql, params)
         rows = cur.fetchall()
 
-    normalized = []
+    out = []
     for r in rows:
-        item = {c: r.get(c) for c in cols}
-        # valeurs par défaut raisonnables
-        item.setdefault("name", "")
-        item.setdefault("description", "")
-        item.setdefault("category", "")
+        item = {k: r.get(k) for k in r.keys()}  # include joins (category/brand)
+        # normalize keys expected by the rest of your code
+        item.setdefault("name","")
+        item.setdefault("description","")
         item.setdefault("price", 0.0)
         item.setdefault("eco_rating", 0.0)
-        item.setdefault("tags", "")
+        # if we didn't join names, provide empty readable fields
+        item.setdefault("category", "")
         item.setdefault("brand", "")
-        item.setdefault("materials", "")
-        item.setdefault("certifications", "")
-        item.setdefault("source_url", "")
-        normalized.append(item)
-    return normalized
+        # optional fields
+        for k in ("materials","certifications","tags","source_url","image_url"):
+            item.setdefault(k, "")
+        out.append(item)
+    return out
 
-# ---------- Prétraitement & extraction auto de mots-clés ----------
+
+# ---------- NLP util ----------
 STOP_WORDS = set(stopwords.words('english')) | {
-    # quelques stopwords FR
-    "les", "des", "pour", "avec", "dans", "sur", "une", "un", "le", "la",
-    "de", "du", "et", "ou", "au", "aux", "en", "plus", "eco", "écologique"
+    "les","des","pour","avec","dans","sur","une","un","le","la","de","du",
+    "et","ou","au","aux","en","plus","eco","écologique"
 }
 LEMM = WordNetLemmatizer()
-GOOD_POS = {"NN","NNS","NNP","NNPS","JJ","JJR","JJS"}  # noms + adjectifs
+GOOD_POS = {"NN","NNS","NNP","NNPS","JJ","JJR","JJS"}
 
 def normalize_text(text: str) -> str:
-    if not text:
-        return ""
+    if not text: return ""
     return re.sub(r"[^a-zA-Z\s\-]", " ", text.lower())
 
 def extract_keywords_free(text: str):
-    """Extraction automatique légère (POS + stopwords + lemma)."""
     text = normalize_text(text)
-    if not text.strip():
-        return []
+    if not text.strip(): return []
     toks = word_tokenize(text)
-    pos = pos_tag(toks)  # modèle EN, fonctionne raisonnablement en FR simple
+    pos = pos_tag(toks)
     out = []
     for tok, tag in pos:
-        if tag in GOOD_POS and len(tok) > 2 and tok not in STOP_WORDS:
+        if tag in GOOD_POS and len(tok)>2 and tok not in STOP_WORDS:
             out.append(LEMM.lemmatize(tok))
     return out
 
-# ---------- TF-IDF & Cosine ----------
 def build_tfidf_index(doc_tokens_list):
     N = len(doc_tokens_list)
     df = Counter()
     for tokens in doc_tokens_list:
         df.update(set(tokens))
-    idf = {term: (math.log((N + 1) / (d + 1)) + 1.0) for term, d in df.items()}
+    idf = {term: (math.log((N+1)/(d+1))+1.0) for term, d in df.items()}
     tf_vectors = []
     for tokens in doc_tokens_list:
         if not tokens:
             tf_vectors.append({})
             continue
         tf = Counter(tokens)
-        vec = {t: (tf[t] / len(tokens)) * idf.get(t, 0.0) for t in tf}
+        vec = {t: (tf[t]/len(tokens))*idf.get(t,0.0) for t in tf}
         tf_vectors.append(vec)
     return idf, tf_vectors
 
 def tfidf_vector(tokens, idf):
-    if not tokens:
-        return {}
+    if not tokens: return {}
     tf = Counter(tokens)
-    return {t: (tf[t] / len(tokens)) * idf.get(t, 0.0) for t in tf}
+    return {t: (tf[t]/len(tokens))*idf.get(t,0.0) for t in tf}
 
 def cosine_sim(a: dict, b: dict):
-    if not a or not b:
-        return 0.0
-    dot = sum(a[t] * b.get(t, 0.0) for t in a)
+    if not a or not b: return 0.0
+    dot = sum(a[t]*b.get(t,0.0) for t in a)
     na = math.sqrt(sum(v*v for v in a.values()))
     nb = math.sqrt(sum(v*v for v in b.values()))
-    return (dot / (na * nb)) if (na > 0 and nb > 0) else 0.0
+    return (dot/(na*nb)) if na>0 and nb>0 else 0.0
 
-# ------------------- Routes -------------------
-
-# Root : si on l'appelle avec ?q=..., on route vers /ai-search (évite les 404 sur "/?q=...").
-@app.route("/", methods=["GET"])
-def root():
-    q = request.args.get("q")
-    if q is not None:
-        return ai_search()
-    return jsonify({
-        "ok": True,
-        "service": "eco-nlp",
-        "endpoints": ["/health", "/ai-search?q=...", "/recommend?user_id=&product_id=", "/analyze_review (POST JSON)"]
-    }), 200
-
+# ---------- Health ----------
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({"ok": True}), 200
 
+# ---------- Analyze review (maj eco_rating) ----------
+# ---------- Analyze review (maj eco_rating) ----------
 @app.route("/analyze_review", methods=["POST"])
 def analyze_review():
     try:
         data = request.json or {}
-        product_id = data.get("product_id", 0)
-        review_text = data.get("review", "")
-
-        print(f"📌 Avis reçu : {review_text} pour le produit {product_id}")
+        product_id = data.get("product_id")
+        review_text = data.get("review","")
+        print(f"📝 review for product {product_id}: {review_text}")
 
         polarity = TextBlob(review_text).sentiment.polarity
-        print(f"🧠 Score de sentiment : {polarity}")
+        print("🧠 polarity:", polarity)
 
         conn = get_db_connection()
         with conn:
             with conn.cursor() as cur:
-                cur.execute('SELECT id FROM "Products" WHERE id = %s;', (product_id,))
+                # 🔁 table snake_case + alias p
+                cur.execute('SELECT p.id FROM "products" p WHERE p.id=%s;', (product_id,))
                 if not cur.fetchone():
-                    conn.close()
-                    return jsonify({"error": "Produit non trouvé"}), 404
+                    return jsonify({"ok": False, "error": "PRODUCT_NOT_FOUND"}), 404
 
                 if polarity > 0.1:
-                    cur.execute('UPDATE "Products" SET eco_rating = eco_rating + 1 WHERE id = %s AND eco_rating < 5;', (product_id,))
+                    cur.execute('UPDATE "products" SET eco_rating = LEAST(COALESCE(eco_rating,0) + 1, 5) WHERE id=%s;', (product_id,))
                 elif polarity < -0.1:
-                    cur.execute('UPDATE "Products" SET eco_rating = eco_rating - 1 WHERE id = %s AND eco_rating > 1;', (product_id,))
+                    cur.execute('UPDATE "products" SET eco_rating = GREATEST(COALESCE(eco_rating,0) - 1, 1) WHERE id=%s;', (product_id,))
 
         conn.close()
-        return jsonify({"message": "Analyse réussie", "review": review_text, "sentiment": polarity}), 200
-
+        return jsonify({"ok": True, "message": "Analyse réussie", "sentiment": polarity}), 200
     except Exception as e:
-        print(f"❌ Erreur serveur : {e}")
-        return jsonify({"error": str(e)}), 500
+        print("❌ analyze_review error:", e)
+        return jsonify({"ok": False, "message": "analyze_review_skipped"}), 200
 
-@app.route("/recommend", methods=["GET", "OPTIONS"])
+# ---------- Recommend ----------
+@app.route("/recommend", methods=["GET"])
 def recommend():
     try:
         user_id = request.args.get("user_id", type=int)
@@ -222,8 +229,12 @@ def recommend():
             return jsonify({"ok": False, "error": "PRODUCT_NOT_FOUND"}), 404
 
         category = (prod.get("category") or "").strip()
-        all_rows = select_products(conn, wanted=PREFERRED_PRODUCT_COLUMNS,
-                                   extra_where='WHERE "id" <> %s', params=(product_id,))
+        all_rows = select_products(
+            conn,
+            wanted=PREFERRED_PRODUCT_COLUMNS,
+            extra_where='WHERE p."id" <> %s',   
+            params=(product_id,)
+        )
         conn.close()
 
         pool = [r for r in all_rows if (r.get("category") or "").strip() == category] or all_rows
@@ -232,61 +243,129 @@ def recommend():
 
         recs = [{
             "product_id": r["id"],
-            "name": r.get("name", ""),
-            "description": r.get("description", "") or "",
-            "category": r.get("category", "") or "",
+            "name": r.get("name",""),
+            "description": r.get("description","") or "",
+            "category": r.get("category","") or "",
             "price": float(r.get("price") or 0.0),
             "eco_rating": float(r.get("eco_rating") or 0.0),
-            "brand": r.get("brand", "") or "",
-            "materials": r.get("materials", "") or "",
-            "certifications": r.get("certifications", "") or "",
-            "tags": r.get("tags", "") or "",
-            "source_url": r.get("source_url", "") or ""
+            "brand": r.get("brand","") or "",
+            "materials": r.get("materials","") or "",
+            "certifications": r.get("certifications","") or "",
+            "tags": r.get("tags","") or "",
+            "source_url": r.get("source_url","") or ""
         } for r in pool]
 
         return jsonify({"ok": True, "user_id": user_id, "product_id": product_id, "recommendations": recs}), 200
-
     except Exception as e:
-        print(f"❌ /recommend error: {e}")
+        print("❌ /recommend error:", e)
         return jsonify({"ok": False, "error": "SERVER_ERROR"}), 500
+
+# ---------- AI Search ----------
+# --- helper: build WHERE (...) and params from query terms
+import re
+
+def _build_sql_filter_from_query(conn, q: str):
+    terms = [t for t in re.split(r"\s+", q.strip()) if t]
+    if not terms:
+        return None, ()
+
+    pcols = get_table_columns(conn, "products")
+    have_categories = table_exists(conn, "categories") and {"id","name"} <= get_table_columns(conn, "categories")
+    have_brands     = table_exists(conn, "brands") and {"id","name"} <= get_table_columns(conn, "brands")
+
+    searchable = []
+    # always: product name/description if present
+    if "name" in pcols: searchable.append('p."name"')
+    if "description" in pcols: searchable.append('p."description"')
+    # tags/materials/certifications if you still have them
+    if "tags" in pcols: searchable.append('p."tags"')
+    if "materials" in pcols: searchable.append('p."materials"')
+    if "certifications" in pcols: searchable.append('p."certifications"')
+    # human-readable joins (category/brand names)
+    if have_categories and "category_id" in pcols:
+        searchable.append('c."name"')
+    if have_brands and "brand_id" in pcols:
+        searchable.append('b."name"')
+
+    if not searchable:
+        return None, ()
+
+    clauses, params = [], []
+    for t in terms:
+        pat = f"%{t}%"
+        part = " OR ".join([f"{col} ILIKE %s" for col in searchable])
+        clauses.append(f"({part})")
+        params.extend([pat] * len(searchable))
+
+    return "WHERE " + " AND ".join(clauses), tuple(params)
+
+# --- lightweight tokenizer (no NLTK needed)
+def _simple_tokens(text: str):
+    if not text:
+        return []
+    tokens = re.findall(r"[A-Za-zÀ-ÖØ-öø-ÿ0-9]+", text.lower())
+    return [t for t in tokens if len(t) > 2 and t not in STOP_WORDS]
 
 @app.route("/ai-search", methods=["GET"])
 def ai_search():
     try:
         query = (request.args.get("q", "") or "").strip()
+        print(f"[ai-search] q='{query}'")
         if not query:
-            return jsonify({"results": []})
-
-        print(f"🤖 AI Search: '{query}'")
+            return jsonify({"results": []}), 200
 
         conn = get_db_connection()
-        products = select_products(conn, wanted=PREFERRED_PRODUCT_COLUMNS)
+        extra_where, params = _build_sql_filter_from_query(conn, query)
+
+        products = select_products(conn, wanted=PREFERRED_PRODUCT_COLUMNS,
+                                   extra_where=extra_where, params=params)
         conn.close()
+
         if not products:
-            return jsonify({"results": []})
+            return jsonify({"results": []}), 200
 
         docs = []
         for p in products:
-            parts = [
-                p.get("name",""), p.get("description",""), p.get("category",""),
-                p.get("brand",""), p.get("materials",""),
-                p.get("certifications",""), p.get("tags","")
-            ]
-            docs.append(" ".join(x for x in parts if x))
+            docs.append(" ".join(s for s in [
+                p.get("name",""), p.get("description",""),
+                p.get("category",""),  # comes from join alias if available
+                p.get("brand",""),     # comes from join alias if available
+                p.get("materials",""), p.get("certifications",""), p.get("tags","")
+            ] if s))
+        print(f"[ai-search] matched={len(products)} docs={len(docs)}")
 
-        doc_tokens = [extract_keywords_free(d) for d in docs]
+        # lightweight tokens (no NLTK runtime dependency)
+        def _simple_tokens(text: str):
+            tokens = re.findall(r"[A-Za-zÀ-ÖØ-öø-ÿ0-9]+", (text or "").lower())
+            return [t for t in tokens if len(t) > 2 and t not in STOP_WORDS]
+
+        doc_tokens = [_simple_tokens(d) for d in docs]
         idf, tf_vectors = build_tfidf_index(doc_tokens)
 
-        query_tokens = extract_keywords_free(query)
+        query_tokens = _simple_tokens(query)
+        if not query_tokens:
+            products.sort(key=lambda r: (float(r.get("eco_rating") or 0.0),
+                                         -float(r.get("price") or 0.0)), reverse=True)
+            payload = [{
+                "id": p["id"], "name": p.get("name",""), "description": p.get("description","") or "",
+                "category": p.get("category","") or "", "brand": p.get("brand","") or "",
+                "materials": p.get("materials","") or "", "certifications": p.get("certifications","") or "",
+                "tags": p.get("tags","") or "", "price": float(p.get("price") or 0.0),
+                "eco_rating": float(p.get("eco_rating") or 0.0),
+                "compatibility_pct": 0.0, "search_method": "fallback_top_eco_rating"
+            } for p in products[:10]]
+            return jsonify({"results": payload}), 200
+
         q_vec = tfidf_vector(query_tokens, idf)
 
         results = []
         q_lower = query.lower()
         for p, p_vec in zip(products, tf_vectors):
-            sim = cosine_sim(q_vec, p_vec)  # 0..1
+            sim = cosine_sim(q_vec, p_vec)
             bonus = 0.0
             cat = (p.get("category") or "").lower()
-            if cat and cat in q_lower: bonus += 0.05
+            if cat and cat in q_lower:
+                bonus += 0.05
             tags = (p.get("tags") or "").lower()
             if tags:
                 for t in tags.split(","):
@@ -295,28 +374,23 @@ def ai_search():
                         bonus += 0.02
             score = min(sim + bonus, 1.0)
             results.append({
-                "id": p["id"],
-                "name": p.get("name",""),
+                "id": p["id"], "name": p.get("name",""),
                 "description": p.get("description","") or "",
-                "category": p.get("category","") or "",
-                "brand": p.get("brand","") or "",
-                "materials": p.get("materials","") or "",
-                "certifications": p.get("certifications","") or "",
-                "tags": p.get("tags","") or "",
-                "price": float(p.get("price") or 0.0),
+                "category": p.get("category","") or "", "brand": p.get("brand","") or "",
+                "materials": p.get("materials","") or "", "certifications": p.get("certifications","") or "",
+                "tags": p.get("tags","") or "", "price": float(p.get("price") or 0.0),
                 "eco_rating": float(p.get("eco_rating") or 0.0),
                 "compatibility_pct": round(score * 100, 1),
-                "search_method": "tfidf_cosine_auto_keywords"
+                "search_method": "tfidf_cosine_sql_prefilter"
             })
 
         results.sort(key=lambda r: (r["compatibility_pct"], r["eco_rating"]), reverse=True)
-        return jsonify({"results": results[:10]})
+        return jsonify({"results": results[:10]}), 200
 
     except Exception as e:
-        print(f"❌ AI Search Error: {e}")
-        return jsonify({"results": []})
+        print("❌ AI Search Error:", e)
+        return jsonify({"results": []}), 503
 
-# ---------- Run ----------
 if __name__ == "__main__":
-    # ✅ Port aligné avec ton backend (.env: NLP_API_URL=http://127.0.0.1:5001)
-    app.run(debug=True, host='0.0.0.0', port=5001)
+    # NB: tu veux 5001 ici (le backend Node pointe dessus)
+    app.run(debug=True, host="0.0.0.0", port=5001)
