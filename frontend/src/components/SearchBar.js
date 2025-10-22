@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import {
   TextField,
   Button,
@@ -17,20 +17,8 @@ import {
   InputLabel,
   Select,
   MenuItem,
-  // Switch, FormControlLabel // (not used; remove if you like)
 } from '@mui/material';
-import { green } from '@mui/material/colors';
 import api from '../utils/api';
-
-const SUGGESTIONS = [
-  'hair care',
-  'kitchen items',
-  'bamboo products',
-  'eco-friendly soap',
-  'reusable bottles',
-  'yoga mat',
-  'cotton bags',
-];
 
 const CATEGORIES = [
   'hygiène',
@@ -40,114 +28,232 @@ const CATEGORIES = [
   'sport',
   'maison',
   'jardinage',
-  'kit'
+  'kit',
 ];
 
+// ---------- image helpers ----------
+const PLACEHOLDER =
+  'https://images.unsplash.com/photo-1520975964184-9bcd9a59e2bc?q=80&w=1200&auto=format&fit=crop';
+
+function normalizeImageUrl(image_url) {
+  let u = image_url;
+  if (Array.isArray(u)) u = u.find((x) => typeof x === 'string' && x.trim().length > 3) || '';
+  if (typeof u !== 'string') return '';
+  u = u.trim();
+  if (!u) return '';
+  if (u.startsWith('//')) return 'https:' + u;
+  if (/^https?:\/\//i.test(u)) return u;
+  return '';
+}
+
+function Thumb({ src, alt }) {
+  const [imgSrc, setImgSrc] = useState(() => normalizeImageUrl(src) || '');
+  useEffect(() => setImgSrc(normalizeImageUrl(src) || ''), [src]);
+  if (!imgSrc) return null;
+  return (
+    <img
+      src={imgSrc}
+      alt={alt}
+      loading="lazy"
+      decoding="async"
+      referrerPolicy="no-referrer"
+      onError={() => setImgSrc('')}
+      style={{
+        width: '100%',
+        height: 140,
+        objectFit: 'cover',
+        borderRadius: 10,
+        background: '#1113',
+        display: 'block',
+        marginBottom: 12,
+      }}
+    />
+  );
+}
+
+// ---------- number helper ----------
+const n = (v, def = 0) => {
+  if (typeof v === 'string') v = v.replace(',', '.');
+  const x = Number(v);
+  return Number.isFinite(x) ? x : def;
+};
+
+// ---------- main ----------
 const SearchBar = () => {
   const [query, setQuery] = useState('');
-  const [results, setResults] = useState([]);
+  const [rawResults, setRawResults] = useState([]); // unfiltered
+  const [results, setResults] = useState([]);       // filtered/sorted
   const [loading, setLoading] = useState(false);
+  const [aiThinking, setAiThinking] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
   const [error, setError] = useState('');
-  const [typing, setTyping] = useState(false);
-  const [aiThinking, setAiThinking] = useState(false);
 
   const [filters, setFilters] = useState({
     priceRange: [0, 200],
     ecoRatingRange: [0, 5],
     category: '',
-    sortBy: 'relevance'
+    sortBy: 'relevance',
   });
 
-  useEffect(() => {
-    if (query.length > 0) {
-      setTyping(true);
-      const timer = setTimeout(() => setTyping(false), 500);
-      return () => clearTimeout(timer);
-    }
-  }, [query]);
+  // request management
+  const cache = useRef(new Map());              // query -> normalized array
+  const inFlight = useRef(null);                // AbortController
+  const lastQueryRef = useRef('');              // dedupe
 
-  const applyFilters = (products) =>
-    products.filter((product) => {
-      const price = parseFloat(product.price) || 0;
-      if (price < filters.priceRange[0] || price > filters.priceRange[1]) return false;
-
-      const ecoRating = parseFloat(product.eco_rating) || 0;
-      if (ecoRating < filters.ecoRatingRange[0] || ecoRating > filters.ecoRatingRange[1]) return false;
-
-      if (filters.category && product.category !== filters.category) return false;
-
-      return true;
-    });
-
-  const sortResults = (products) => {
-    const sorted = [...products];
-    switch (filters.sortBy) {
-      case 'price-low':
-        return sorted.sort((a, b) => (parseFloat(a.price) || 0) - (parseFloat(b.price) || 0));
-      case 'price-high':
-        return sorted.sort((a, b) => (parseFloat(b.price) || 0) - (parseFloat(a.price) || 0));
-      case 'eco-rating':
-        return sorted.sort((a, b) => (parseFloat(b.eco_rating) || 0) - (parseFloat(a.eco_rating) || 0));
-      case 'name':
-        return sorted.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-      default:
-        return sorted; // relevance
-    }
-  };
-
-  const handleFilterChange = (name, value) => setFilters((p) => ({ ...p, [name]: value }));
+  const handleFilterChange = (name, value) =>
+    setFilters((p) => ({ ...p, [name]: value }));
 
   const clearFilters = () =>
     setFilters({ priceRange: [0, 200], ecoRatingRange: [0, 5], category: '', sortBy: 'relevance' });
 
-  const loadAllProducts = async () => {
-    setLoading(true);
-    setError('');
-    try {
-      const { data } = await api.get('/products?page=1&pageSize=1000');
-      const normalized = Array.isArray(data?.items) ? data.items : [];
-      const filtered = applyFilters(normalized);
-      const sorted = sortResults(filtered);
-      setResults(sorted);
-      setHasSearched(true);
-    } catch (e) {
-      console.error('❌ Error loading products:', e);
-      setError(`Failed to load products: ${e.message}`);
-      setResults([]);
-    } finally {
-      setLoading(false);
+  // normalize any backend shape into a consistent list
+  const normalizePayload = (payload) => {
+    const arr = Array.isArray(payload?.results)
+      ? payload.results
+      : Array.isArray(payload?.items)
+      ? payload.items
+      : Array.isArray(payload)
+      ? payload
+      : [];
+
+    return arr.map((r) => ({
+      id: r.id ?? r.product_id ?? r._id ?? null,
+      name: r.name ?? '',
+      description: r.description ?? '',
+      category: r.category ?? '',
+      price: n(r.price, null),
+      eco_rating: n(r.eco_rating, null),
+      image_url: Array.isArray(r.image_url) ? (r.image_url[0] || '') : (r.image_url ?? ''),
+      score: typeof r.score === 'number' ? r.score : undefined,
+    })).filter((x) => Number.isFinite(x.id) || typeof x.id === 'string');
+  };
+
+  // filtering + sorting pipeline
+  const applyFilters = useCallback((products) => {
+    const { priceRange, ecoRatingRange, category } = filters;
+    return products.filter((p) => {
+      const priceOk =
+        (priceRange?.length === 2)
+          ? (n(p.price, 0) >= n(priceRange[0], 0) && n(p.price, 0) <= n(priceRange[1], 200))
+          : true;
+
+      const eco = n(p.eco_rating, 0);
+      const ecoOk =
+        (ecoRatingRange?.length === 2)
+          ? (eco >= n(ecoRatingRange[0], 0) && eco <= n(ecoRatingRange[1], 5))
+          : true;
+
+      const catOk = category ? (String(p.category || '').toLowerCase() === String(category).toLowerCase()) : true;
+
+      return priceOk && ecoOk && catOk;
+    });
+  }, [filters]);
+
+  const sortResults = useCallback((products) => {
+    const { sortBy } = filters;
+    const arr = [...products];
+    switch (sortBy) {
+      case 'price-low':
+        return arr.sort((a, b) => n(a.price, Infinity) - n(b.price, Infinity));
+      case 'price-high':
+        return arr.sort((a, b) => n(b.price, -1) - n(a.price, -1));
+      case 'eco-rating':
+        return arr.sort((a, b) => n(b.eco_rating, -1) - n(a.eco_rating, -1));
+      case 'name':
+        return arr.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+      default:
+        // relevance: if score exists, sort desc by score; fallback name
+        return arr.sort((a, b) => n(b.score, 0) - n(a.score, 0) || (a.name || '').localeCompare(b.name || ''));
+    }
+  }, [filters]);
+
+  const runPipeline = useCallback((list) => sortResults(applyFilters(list)), [applyFilters, sortResults]);
+
+  // Re-apply filters whenever filters or rawResults change
+  useEffect(() => {
+    setResults(runPipeline(rawResults));
+  }, [rawResults, runPipeline]);
+
+  // Cancel any current request
+  const cancelInFlight = () => {
+    if (inFlight.current) {
+      inFlight.current.abort();
+      inFlight.current = null;
     }
   };
 
+  // Load all (once per click), not on every small change
+  const loadAllProducts = async () => {
+    setError('');
+    setHasSearched(true);
+    setAiThinking(true);
+    setLoading(true);
+
+    cancelInFlight();
+    const ctrl = new AbortController();
+    inFlight.current = ctrl;
+
+    try {
+      const { data } = await api.get('/products?page=1&pageSize=1000', { signal: ctrl.signal });
+      const normalized = normalizePayload(data);
+      setRawResults(normalized);
+    } catch (e) {
+      if (e.name !== 'CanceledError' && e.name !== 'AbortError') {
+        console.error('❌ Error loading products:', e);
+        setError(`Failed to load products: ${e.message}`);
+        setRawResults([]);
+      }
+    } finally {
+      setAiThinking(false);
+      setLoading(false);
+      inFlight.current = null;
+    }
+  };
+
+  // Search on explicit action only (Enter or button click)
   const handleSearch = async (qOverride) => {
-    const q = typeof qOverride === 'string' ? qOverride : query;
-    if (!q.trim()) {
+    const q = typeof qOverride === 'string' ? qOverride.trim() : query.trim();
+
+    setError('');
+    setHasSearched(true);
+
+    if (!q) {
       await loadAllProducts();
       return;
     }
 
-    setLoading(true);
-    setAiThinking(true);
-    setHasSearched(true);
-    setError('');
+    // dedupe same query if already cached
+    if (cache.current.has(q)) {
+      setRawResults(cache.current.get(q));
+      return;
+    }
 
-    await new Promise((r) => setTimeout(r, 800)); // UX shimmer
+    // avoid sending same query multiple times rapidly
+    if (lastQueryRef.current === q && loading) return;
+    lastQueryRef.current = q;
+
+    setAiThinking(true);
+    setLoading(true);
+
+    cancelInFlight();
+    const ctrl = new AbortController();
+    inFlight.current = ctrl;
 
     try {
-      const res = await api.get(`/products/search?q=${encodeURIComponent(q)}`);
-      const data = res?.data;
-      const normalized = Array.isArray(data?.results) ? data.results : Array.isArray(data) ? data : [];
-      const filtered = applyFilters(normalized);
-      const sorted = sortResults(filtered);
-      setResults(sorted);
+      const res = await api.get(`/products/search?q=${encodeURIComponent(q)}`, { signal: ctrl.signal });
+      const normalized = normalizePayload(res?.data);
+      cache.current.set(q, normalized);
+      setRawResults(normalized);
     } catch (e) {
-      console.error('Search error:', e);
-      setError('AI search encountered an error. Please try again.');
-      setResults([]);
+      if (e.name !== 'CanceledError' && e.name !== 'AbortError') {
+        console.error('Search error:', e);
+        setError('AI search encountered an error. Please try again.');
+        setRawResults([]);
+      }
     } finally {
-      setLoading(false);
       setAiThinking(false);
+      setLoading(false);
+      inFlight.current = null;
     }
   };
 
@@ -168,88 +274,34 @@ const SearchBar = () => {
         background: 'linear-gradient(135deg, #0f0f23 0%, #1a1a2e 50%, #16213e 100%)',
         position: 'relative',
         overflow: 'hidden',
-        '&::before': {
-          content: '""',
-          position: 'absolute',
-          inset: 0,
-          background: `
-            radial-gradient(circle at 20% 80%, rgba(120, 119, 198, 0.3) 0%, transparent 50%),
-            radial-gradient(circle at 80% 20%, rgba(255, 119, 198, 0.3) 0%, transparent 50%),
-            radial-gradient(circle at 40% 40%, rgba(120, 219, 255, 0.2) 0%, transparent 50%)
-          `,
-          animation: 'pulse 4s ease-in-out infinite alternate',
-        },
-        '@keyframes pulse': {
-          '0%': { opacity: 0.5 },
-          '100%': { opacity: 0.8 },
-        },
       }}
     >
-      {/* Background particles */}
-      <Box
-        sx={{
-          position: 'absolute',
-          inset: 0,
-          background: `
-            radial-gradient(2px 2px at 20px 30px, #eee, transparent),
-            radial-gradient(2px 2px at 40px 70px, rgba(255,255,255,0.5), transparent),
-            radial-gradient(1px 1px at 90px 40px, #fff, transparent),
-            radial-gradient(1px 1px at 130px 80px, rgba(255,255,255,0.3), transparent),
-            radial-gradient(2px 2px at 160px 30px, #eee, transparent)
-          `,
-          backgroundRepeat: 'repeat',
-          backgroundSize: '200px 100px',
-          animation: 'float 6s ease-in-out infinite',
-          opacity: 0.3,
-          '@keyframes float': {
-            '0%, 100%': { transform: 'translateY(0px)' },
-            '50%': { transform: 'translateY(-20px)' },
-          },
-        }}
-      />
-
       <Box sx={{ position: 'relative', zIndex: 1, p: 4 }}>
         {/* Header */}
-        <Fade in timeout={1000}>
-          <Box sx={{ textAlign: 'center', mb: 6 }}>
+        <Fade in timeout={600}>
+          <Box sx={{ textAlign: 'center', mb: 4 }}>
             <Typography
-              variant="h2"
+              variant="h3"
               sx={{
                 background: 'linear-gradient(45deg, #00d4ff, #ff00ff, #00ff88)',
                 backgroundClip: 'text',
                 WebkitBackgroundClip: 'text',
                 WebkitTextFillColor: 'transparent',
                 fontWeight: 'bold',
-                mb: 2,
-                fontSize: { xs: '2.5rem', md: '3.5rem' },
-                textShadow: '0 0 30px rgba(0, 212, 255, 0.5)',
-                animation: 'glow 2s ease-in-out infinite alternate',
-                '@keyframes glow': {
-                  '0%': { textShadow: '0 0 30px rgba(0, 212, 255, 0.5)' },
-                  '100%': { textShadow: '0 0 40px rgba(255, 0, 255, 0.8)' },
-                },
+                mb: 1,
               }}
             >
               🤖 AI Product Search
             </Typography>
-            <Typography
-              variant="h6"
-              sx={{
-                color: 'rgba(255, 255, 255, 0.8)',
-                fontWeight: 300,
-                maxWidth: 600,
-                mx: 'auto',
-                lineHeight: 1.6,
-              }}
-            >
-              Powered by advanced AI algorithms to find the perfect eco-friendly products for you
+            <Typography variant="h6" sx={{ color: 'rgba(255, 255, 255, 0.8)', fontWeight: 300 }}>
+              Find the perfect eco-friendly products
             </Typography>
           </Box>
         </Fade>
 
         {/* Search bar */}
-        <Fade in timeout={1500}>
-          <Box sx={{ maxWidth: 800, mx: 'auto', mb: 6 }}>
+        <Fade in timeout={800}>
+          <Box sx={{ maxWidth: 900, mx: 'auto', mb: 4 }}>
             <Box
               sx={{
                 display: 'flex',
@@ -257,30 +309,26 @@ const SearchBar = () => {
                 alignItems: 'center',
                 background: 'rgba(255, 255, 255, 0.05)',
                 backdropFilter: 'blur(10px)',
-                borderRadius: 4,
-                p: 3,
+                borderRadius: 3,
+                p: 2,
                 border: '1px solid rgba(255, 255, 255, 0.1)',
-                boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3)',
               }}
             >
               <TextField
                 fullWidth
                 variant="outlined"
-                placeholder="Ask AI to find eco-friendly products... (e.g., 'sustainable hair care', 'zero waste kitchen')"
+                placeholder="Ask AI… e.g. “bamboo toothbrush”, “zero waste kitchen”"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 onKeyDown={handleKeyDown}
                 sx={{
                   '& .MuiOutlinedInput-root': {
                     backgroundColor: 'rgba(255, 255, 255, 0.1)',
-                    borderRadius: 3,
+                    borderRadius: 2,
                     color: 'white',
                     '& fieldset': { borderColor: 'rgba(255, 255, 255, 0.2)' },
                     '&:hover fieldset': { borderColor: 'rgba(0, 212, 255, 0.5)' },
-                    '&.Mui-focused fieldset': {
-                      borderColor: '#00d4ff',
-                      boxShadow: '0 0 20px rgba(0, 212, 255, 0.3)',
-                    },
+                    '&.Mui-focused fieldset': { borderColor: '#00d4ff' },
                   },
                   '& .MuiInputBase-input': {
                     color: 'white',
@@ -294,29 +342,17 @@ const SearchBar = () => {
                 disabled={loading}
                 sx={{
                   background: 'linear-gradient(45deg, #00d4ff, #ff00ff)',
-                  minWidth: 140,
+                  minWidth: 130,
                   height: 56,
-                  borderRadius: 3,
+                  borderRadius: 2,
                   fontWeight: 'bold',
                   textTransform: 'none',
-                  fontSize: '1.1rem',
-                  boxShadow: '0 4px 20px rgba(0, 212, 255, 0.4)',
-                  '&:hover': {
-                    background: 'linear-gradient(45deg, #ff00ff, #00d4ff)',
-                    boxShadow: '0 6px 25px rgba(255, 0, 255, 0.4)',
-                    transform: 'translateY(-2px)',
-                  },
-                  '&:disabled': {
-                    background: 'rgba(255, 255, 255, 0.1)',
-                    color: 'rgba(255, 255, 255, 0.5)',
-                  },
-                  transition: 'all 0.3s ease',
                 }}
               >
                 {loading ? (
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                     <CircularProgress size={20} color="inherit" />
-                    <span>AI Thinking...</span>
+                    <span>Searching…</span>
                   </Box>
                 ) : (
                   '🚀 Search'
@@ -325,18 +361,12 @@ const SearchBar = () => {
             </Box>
 
             {aiThinking && (
-              <Box sx={{ mt: 2, textAlign: 'center' }}>
-                <Typography variant="body2" sx={{ color: 'rgba(255, 255, 255, 0.7)', mb: 1 }}>
-                  AI is analyzing your request...
-                </Typography>
+              <Box sx={{ mt: 2 }}>
                 <LinearProgress
                   sx={{
                     height: 4,
                     borderRadius: 2,
                     background: 'rgba(255, 255, 255, 0.1)',
-                    '& .MuiLinearProgress-bar': {
-                      background: 'linear-gradient(45deg, #00d4ff, #ff00ff)',
-                    },
                   }}
                 />
               </Box>
@@ -364,510 +394,264 @@ const SearchBar = () => {
         </Fade>
 
         {/* Filters */}
-        <Fade in timeout={1000}>
-          <Box sx={{ maxWidth: 1000, mx: 'auto', mb: 6 }}>
-            <Box
-              sx={{
-                background: 'rgba(255, 255, 255, 0.05)',
-                backdropFilter: 'blur(15px)',
-                borderRadius: 3,
-                p: 4,
-                border: '1px solid rgba(255, 255, 255, 0.1)',
-                boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3)',
-              }}
-            >
-              <Box sx={{ textAlign: 'center', mb: 4 }}>
-                <Typography
+        <Fade in timeout={900}>
+          <Box sx={{ maxWidth: 1000, mx: 'auto', mb: 5 }}>
+            <Grid container spacing={3}>
+              {/* Price */}
+              <Grid item xs={12} md={6}>
+                <Box
                   sx={{
-                    color: 'white',
-                    fontWeight: 600,
-                    fontSize: '1.8rem',
-                    mb: 1,
-                    letterSpacing: '-0.5px',
+                    background: 'rgba(255, 255, 255, 0.05)',
+                    borderRadius: 2,
+                    p: 3,
+                    border: '1px solid rgba(255, 255, 255, 0.1)',
                   }}
                 >
-                  Advanced Filtering
-                </Typography>
-                <Typography
-                  sx={{
-                    color: 'rgba(255, 255, 255, 0.6)',
-                    fontSize: '0.95rem',
-                    fontWeight: 400,
-                    letterSpacing: '0.3px',
-                  }}
-                >
-                  Refine your search with precision controls
-                </Typography>
-              </Box>
-
-              <Grid container spacing={4}>
-                {/* Price */}
-                <Grid item xs={12} md={6}>
-                  <Box
-                    sx={{
-                      background: 'rgba(255, 255, 255, 0.03)',
-                      borderRadius: 2,
-                      p: 3,
-                      border: '1px solid rgba(255, 255, 255, 0.08)',
-                      transition: 'all 0.2s ease',
-                      '&:hover': {
-                        borderColor: 'rgba(255, 255, 255, 0.15)',
-                        background: 'rgba(255, 255, 255, 0.05)',
-                      },
-                    }}
-                  >
-                    <Typography
-                      sx={{
-                        color: 'white',
-                        fontWeight: 500,
-                        fontSize: '0.9rem',
-                        mb: 2,
-                        textTransform: 'uppercase',
-                        letterSpacing: '0.5px',
-                      }}
-                    >
-                      Price Range
-                    </Typography>
-                    <Typography
-                      sx={{
-                        color: 'rgba(255, 255, 255, 0.8)',
-                        mb: 3,
-                        fontWeight: 400,
-                        fontSize: '1.1rem',
-                        textAlign: 'center',
-                      }}
-                    >
-                      ${filters.priceRange[0]} - ${filters.priceRange[1]}
-                    </Typography>
-                    <Slider
-                      value={filters.priceRange}
-                      onChange={(_, v) => handleFilterChange('priceRange', v)}
-                      valueLabelDisplay="auto"
-                      min={0}
-                      max={200}
-                      sx={{
-                        color: '#ffffff',
-                        height: 6,
-                        '& .MuiSlider-track': { background: '#ffffff', height: 6, borderRadius: 3 },
-                        '& .MuiSlider-rail': { background: 'rgba(255, 255, 255, 0.15)', height: 6, borderRadius: 3 },
-                        '& .MuiSlider-thumb': {
-                          width: 20,
-                          height: 20,
-                          background: '#ffffff',
-                          border: '2px solid rgba(0, 0, 0, 0.1)',
-                          '&:hover': { boxShadow: '0 0 0 8px rgba(255, 255, 255, 0.1)' },
-                          '&.Mui-focusVisible': { boxShadow: '0 0 0 8px rgba(255, 255, 255, 0.2)' },
-                        },
-                        '& .MuiSlider-valueLabel': {
-                          background: 'rgba(0, 0, 0, 0.8)',
-                          borderRadius: 2,
-                          fontSize: '0.75rem',
-                          fontWeight: 500,
-                        },
-                      }}
-                    />
-                  </Box>
-                </Grid>
-
-                {/* Eco Rating */}
-                <Grid item xs={12} md={6}>
-                  <Box
-                    sx={{
-                      background: 'rgba(255, 255, 255, 0.03)',
-                      borderRadius: 2,
-                      p: 3,
-                      border: '1px solid rgba(255, 255, 255, 0.08)',
-                      transition: 'all 0.2s ease',
-                      '&:hover': {
-                        borderColor: 'rgba(255, 255, 255, 0.15)',
-                        background: 'rgba(255, 255, 255, 0.05)',
-                      },
-                    }}
-                  >
-                    <Typography
-                      sx={{
-                        color: 'white',
-                        fontWeight: 500,
-                        fontSize: '0.9rem',
-                        mb: 2,
-                        textTransform: 'uppercase',
-                        letterSpacing: '0.5px',
-                      }}
-                    >
-                      Eco Rating
-                    </Typography>
-                    <Typography
-                      sx={{
-                        color: 'rgba(255, 255, 255, 0.8)',
-                        mb: 3,
-                        fontWeight: 400,
-                        fontSize: '1.1rem',
-                        textAlign: 'center',
-                      }}
-                    >
-                      {filters.ecoRatingRange[0]} - {filters.ecoRatingRange[1]} stars
-                    </Typography>
-                    <Slider
-                      value={filters.ecoRatingRange}
-                      onChange={(_, v) => handleFilterChange('ecoRatingRange', v)}
-                      valueLabelDisplay="auto"
-                      min={0}
-                      max={5}
-                      step={0.1}
-                      sx={{
-                        color: '#ffffff',
-                        height: 6,
-                        '& .MuiSlider-track': { background: '#ffffff', height: 6, borderRadius: 3 },
-                        '& .MuiSlider-rail': { background: 'rgba(255, 255, 255, 0.15)', height: 6, borderRadius: 3 },
-                        '& .MuiSlider-thumb': {
-                          width: 20,
-                          height: 20,
-                          background: '#ffffff',
-                          border: '2px solid rgba(0, 0, 0, 0.1)',
-                          '&:hover': { boxShadow: '0 0 0 8px rgba(255, 255, 255, 0.1)' },
-                          '&.Mui-focusVisible': { boxShadow: '0 0 0 8px rgba(255, 255, 255, 0.2)' },
-                        },
-                        '& .MuiSlider-valueLabel': {
-                          background: 'rgba(0, 0, 0, 0.8)',
-                          borderRadius: 2,
-                          fontSize: '0.75rem',
-                          fontWeight: 500,
-                        },
-                      }}
-                    />
-                  </Box>
-                </Grid>
-
-                {/* Category */}
-                <Grid item xs={12} md={6}>
-                  <Box
-                    sx={{
-                      background: 'rgba(255, 255, 255, 0.03)',
-                      borderRadius: 2,
-                      p: 3,
-                      border: '1px solid rgba(255, 255, 255, 0.08)',
-                      transition: 'all 0.2s ease',
-                      '&:hover': {
-                        borderColor: 'rgba(255, 255, 255, 0.15)',
-                        background: 'rgba(255, 255, 255, 0.05)',
-                      },
-                    }}
-                  >
-                    <Typography
-                      sx={{
-                        color: 'white',
-                        fontWeight: 500,
-                        fontSize: '0.9rem',
-                        mb: 2,
-                        textTransform: 'uppercase',
-                        letterSpacing: '0.5px',
-                      }}
-                    >
-                      Category
-                    </Typography>
-                    <FormControl fullWidth>
-                      <InputLabel
-                        sx={{
-                          color: 'rgba(255, 255, 255, 0.6)',
-                          '&.Mui-focused': { color: 'rgba(255, 255, 255, 0.8)' },
-                        }}
-                      >
-                        Select Category
-                      </InputLabel>
-                      <Select
-                        value={filters.category}
-                        onChange={(e) => handleFilterChange('category', e.target.value)}
-                        sx={{
-                          color: 'white',
-                          '& .MuiOutlinedInput-notchedOutline': {
-                            borderColor: 'rgba(255, 255, 255, 0.2)',
-                            borderWidth: 1,
-                          },
-                          '&:hover .MuiOutlinedInput-notchedOutline': {
-                            borderColor: 'rgba(255, 255, 255, 0.4)',
-                          },
-                          '&.Mui-focused .MuiOutlinedInput-notchedOutline': {
-                            borderColor: 'rgba(255, 255, 255, 0.6)',
-                          },
-                          '& .MuiSelect-icon': {
-                            color: 'rgba(255, 255, 255, 0.6)',
-                          },
-                        }}
-                      >
-                        <MenuItem value="">All Categories</MenuItem>
-                        {CATEGORIES.map((category) => (
-                          <MenuItem key={category} value={category}>
-                            {category.charAt(0).toUpperCase() + category.slice(1)}
-                          </MenuItem>
-                        ))}
-                      </Select>
-                    </FormControl>
-                  </Box>
-                </Grid>
-
-                {/* Sort By */}
-                <Grid item xs={12} md={6}>
-                  <Box
-                    sx={{
-                      background: 'rgba(255, 255, 255, 0.03)',
-                      borderRadius: 2,
-                      p: 3,
-                      border: '1px solid rgba(255, 255, 255, 0.08)',
-                      transition: 'all 0.2s ease',
-                      '&:hover': {
-                        borderColor: 'rgba(255, 255, 255, 0.15)',
-                        background: 'rgba(255, 255, 255, 0.05)',
-                      },
-                    }}
-                  >
-                    <Typography
-                      sx={{
-                        color: 'white',
-                        fontWeight: 500,
-                        fontSize: '0.9rem',
-                        mb: 2,
-                        textTransform: 'uppercase',
-                        letterSpacing: '0.5px',
-                      }}
-                    >
-                      Sort By
-                    </Typography>
-                    <FormControl fullWidth>
-                      <InputLabel
-                        sx={{
-                          color: 'rgba(255, 255, 255, 0.6)',
-                          '&.Mui-focused': { color: 'rgba(255, 255, 255, 0.8)' },
-                        }}
-                      >
-                        Sort Order
-                      </InputLabel>
-                      <Select
-                        value={filters.sortBy}
-                        onChange={(e) => handleFilterChange('sortBy', e.target.value)}
-                        sx={{
-                          color: 'white',
-                          '& .MuiOutlinedInput-notchedOutline': {
-                            borderColor: 'rgba(255, 255, 255, 0.2)',
-                            borderWidth: 1,
-                          },
-                          '&:hover .MuiOutlinedInput-notchedOutline': {
-                            borderColor: 'rgba(255, 255, 255, 0.4)',
-                          },
-                          '&.Mui-focused .MuiOutlinedInput-notchedOutline': {
-                            borderColor: 'rgba(255, 255, 255, 0.6)',
-                          },
-                          '& .MuiSelect-icon': {
-                            color: 'rgba(255, 255, 255, 0.6)',
-                          },
-                        }}
-                      >
-                        <MenuItem value="relevance">Relevance</MenuItem>
-                        <MenuItem value="price-low">Price: Low to High</MenuItem>
-                        <MenuItem value="price-high">Price: High to Low</MenuItem>
-                        <MenuItem value="eco-rating">Eco Rating</MenuItem>
-                        <MenuItem value="name">Name A-Z</MenuItem>
-                      </Select>
-                    </FormControl>
-                  </Box>
-                </Grid>
-
-                {/* Actions */}
-                <Grid item xs={12}>
-                  <Box sx={{ display: 'flex', gap: 2, justifyContent: 'center', mt: 4, flexWrap: 'wrap' }}>
-                    <Button
-                      variant="outlined"
-                      onClick={clearFilters}
-                      sx={{
-                        color: 'rgba(255, 255, 255, 0.7)',
-                        borderColor: 'rgba(255, 255, 255, 0.2)',
-                        borderRadius: 2,
-                        px: 3,
-                        py: 1,
-                        fontSize: '0.9rem',
-                        fontWeight: 500,
-                        textTransform: 'none',
-                        transition: 'all 0.2s ease',
-                        '&:hover': {
-                          borderColor: 'rgba(255, 255, 255, 0.4)',
-                          backgroundColor: 'rgba(255, 255, 255, 0.05)',
-                          color: 'white',
-                        },
-                      }}
-                    >
-                      Clear Filters
-                    </Button>
-
-                    <Button
-                      variant="contained"
-                      onClick={loadAllProducts}
-                      sx={{
-                        background: 'rgba(255, 255, 255, 0.1)',
-                        borderRadius: 2,
-                        px: 3,
-                        py: 1,
-                        fontSize: '0.9rem',
-                        fontWeight: 500,
-                        textTransform: 'none',
-                        color: 'white',
-                        border: '1px solid rgba(255, 255, 255, 0.2)',
-                        transition: 'all 0.2s ease',
-                        '&:hover': {
-                          background: 'rgba(255, 255, 255, 0.15)',
-                          borderColor: 'rgba(255, 255, 255, 0.3)',
-                        },
-                      }}
-                    >
-                      Load All Products
-                    </Button>
-
-                    <Button
-                      variant="contained"
-                      onClick={() => {
-                        const filtered = applyFilters(results);
-                        const sorted = sortResults(filtered);
-                        setResults(sorted);
-                      }}
-                      sx={{
-                        background: 'rgba(255, 255, 255, 0.1)',
-                        borderRadius: 2,
-                        px: 3,
-                        py: 1,
-                        fontSize: '0.9rem',
-                        fontWeight: 500,
-                        textTransform: 'none',
-                        color: 'white',
-                        border: '1px solid rgba(255, 255, 255, 0.2)',
-                        transition: 'all 0.2s ease',
-                        '&:hover': {
-                          background: 'rgba(255, 255, 255, 0.15)',
-                          borderColor: 'rgba(255, 255, 255, 0.3)',
-                        },
-                      }}
-                    >
-                      Apply Filters
-                    </Button>
-                  </Box>
-                </Grid>
+                  <Typography sx={{ color: 'white', mb: 1, fontWeight: 600 }}>Price Range</Typography>
+                  <Typography sx={{ color: 'rgba(255,255,255,0.8)', mb: 2 }}>
+                    ${filters.priceRange[0]} – ${filters.priceRange[1]}
+                  </Typography>
+                  <Slider
+                    value={filters.priceRange}
+                    onChange={(_, v) => handleFilterChange('priceRange', v)}
+                    valueLabelDisplay="auto"
+                    min={0}
+                    max={200}
+                    sx={{ color: '#fff' }}
+                  />
+                </Box>
               </Grid>
-            </Box>
+
+              {/* Eco rating */}
+              <Grid item xs={12} md={6}>
+                <Box
+                  sx={{
+                    background: 'rgba(255, 255, 255, 0.05)',
+                    borderRadius: 2,
+                    p: 3,
+                    border: '1px solid rgba(255, 255, 255, 0.1)',
+                  }}
+                >
+                  <Typography sx={{ color: 'white', mb: 1, fontWeight: 600 }}>Eco Rating</Typography>
+                  <Typography sx={{ color: 'rgba(255,255,255,0.8)', mb: 2 }}>
+                    {filters.ecoRatingRange[0]} – {filters.ecoRatingRange[1]} stars
+                  </Typography>
+                  <Slider
+                    value={filters.ecoRatingRange}
+                    onChange={(_, v) => handleFilterChange('ecoRatingRange', v)}
+                    valueLabelDisplay="auto"
+                    min={0}
+                    max={5}
+                    step={0.1}
+                    sx={{ color: '#fff' }}
+                  />
+                </Box>
+              </Grid>
+
+              {/* Category */}
+              <Grid item xs={12} md={6}>
+                <Box
+                  sx={{
+                    background: 'rgba(255, 255, 255, 0.05)',
+                    borderRadius: 2,
+                    p: 3,
+                    border: '1px solid rgba(255, 255, 255, 0.1)',
+                  }}
+                >
+                  <Typography sx={{ color: 'white', mb: 1, fontWeight: 600 }}>Category</Typography>
+                  <FormControl fullWidth>
+                    <InputLabel sx={{ color: 'rgba(255,255,255,0.7)' }}>Select Category</InputLabel>
+                    <Select
+                      value={filters.category}
+                      onChange={(e) => handleFilterChange('category', e.target.value)}
+                      sx={{
+                        color: 'white',
+                        '& .MuiOutlinedInput-notchedOutline': {
+                          borderColor: 'rgba(255,255,255,0.2)',
+                        },
+                      }}
+                      label="Select Category"
+                    >
+                      <MenuItem value="">All Categories</MenuItem>
+                      {CATEGORIES.map((c) => (
+                        <MenuItem key={c} value={c}>
+                          {c.charAt(0).toUpperCase() + c.slice(1)}
+                        </MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
+                </Box>
+              </Grid>
+
+              {/* Sort */}
+              <Grid item xs={12} md={6}>
+                <Box
+                  sx={{
+                    background: 'rgba(255, 255, 255, 0.05)',
+                    borderRadius: 2,
+                    p: 3,
+                    border: '1px solid rgba(255, 255, 255, 0.1)',
+                  }}
+                >
+                  <Typography sx={{ color: 'white', mb: 1, fontWeight: 600 }}>Sort By</Typography>
+                  <FormControl fullWidth>
+                    <InputLabel sx={{ color: 'rgba(255,255,255,0.7)' }}>Sort Order</InputLabel>
+                    <Select
+                      value={filters.sortBy}
+                      onChange={(e) => handleFilterChange('sortBy', e.target.value)}
+                      sx={{
+                        color: 'white',
+                        '& .MuiOutlinedInput-notchedOutline': {
+                          borderColor: 'rgba(255,255,255,0.2)',
+                        },
+                      }}
+                      label="Sort Order"
+                    >
+                      <MenuItem value="relevance">Relevance</MenuItem>
+                      <MenuItem value="price-low">Price: Low to High</MenuItem>
+                      <MenuItem value="price-high">Price: High to Low</MenuItem>
+                      <MenuItem value="eco-rating">Eco Rating</MenuItem>
+                      <MenuItem value="name">Name A–Z</MenuItem>
+                    </Select>
+                  </FormControl>
+                </Box>
+              </Grid>
+
+              {/* Actions */}
+              <Grid item xs={12} sx={{ display: 'flex', gap: 2, justifyContent: 'center' }}>
+                <Button
+                  variant="outlined"
+                  onClick={clearFilters}
+                  sx={{
+                    color: 'rgba(255,255,255,0.8)',
+                    borderColor: 'rgba(255,255,255,0.3)',
+                  }}
+                >
+                  Clear Filters
+                </Button>
+                <Button
+                  variant="contained"
+                  onClick={loadAllProducts}
+                  disabled={loading}
+                  sx={{
+                    background: 'rgba(255,255,255,0.12)',
+                    color: 'white',
+                    border: '1px solid rgba(255,255,255,0.25)',
+                  }}
+                >
+                  Load All Products
+                </Button>
+                <Button
+                  variant="contained"
+                  onClick={() => setResults(runPipeline(rawResults))}
+                  sx={{
+                    background: 'rgba(255,255,255,0.12)',
+                    color: 'white',
+                    border: '1px solid rgba(255,255,255,0.25)',
+                  }}
+                >
+                  Apply Filters
+                </Button>
+              </Grid>
+            </Grid>
           </Box>
         </Fade>
 
-        {/* Search Results */}
+        {/* Results */}
         {(hasSearched || results.length > 0) && (
-          <Fade in timeout={1000}>
+          <Fade in timeout={500}>
             <Box>
               <Typography
-                variant="h5"
-                sx={{
-                  textAlign: 'center',
-                  mb: 4,
-                  color: 'white',
-                  fontWeight: 'bold',
-                  textShadow: '0 0 20px rgba(0, 212, 255, 0.5)',
-                }}
+                variant="h6"
+                sx={{ textAlign: 'center', mb: 3, color: 'white', fontWeight: 700 }}
               >
-                {loading ? '🔍 Loading products...' : `✨ Found ${count} products`}
+                {loading ? '🔍 Loading products…' : `✨ Found ${count} products`}
               </Typography>
 
               {count === 0 && !loading && (
-                <Box sx={{ textAlign: 'center', mt: 4 }}>
+                <Box sx={{ textAlign: 'center', mt: 3 }}>
                   <Typography
-                    variant="h6"
+                    variant="body1"
                     sx={{
-                      color: 'rgba(255, 255, 255, 0.7)',
-                      mb: 2,
-                      background: 'rgba(255, 255, 255, 0.05)',
-                      p: 3,
-                      borderRadius: 3,
-                      border: '1px solid rgba(255, 255, 255, 0.1)',
+                      color: 'rgba(255,255,255,0.8)',
+                      background: 'rgba(255,255,255,0.06)',
+                      p: 2,
+                      borderRadius: 2,
+                      display: 'inline-block',
                     }}
                   >
-                    🤖 AI couldn't find matching products. Try different keywords like
-                    {' '}“sustainable”, “eco-friendly”, or “zero waste”
+                    🤖 No matches. Try “sustainable”, “eco-friendly”, or “zero waste”.
                   </Typography>
                 </Box>
               )}
 
-              <Grid container spacing={4}>
-                {safeResults.map((product, index) => (
-                  <Grid item xs={12} sm={6} md={4} lg={3} key={product.id ?? `${product.name}-${product.category}`}>
-                    <Zoom in timeout={500 + index * 100}>
+              <Grid container spacing={3}>
+                {safeResults.map((p, i) => (
+                  <Grid item xs={12} sm={6} md={4} lg={3} key={p.id ?? `${p.name}-${i}`}>
+                    <Zoom in timeout={300 + i * 60}>
                       <Card
                         sx={{
-                          background: 'rgba(255, 255, 255, 0.05)',
-                          backdropFilter: 'blur(10px)',
-                          borderRadius: 4,
-                          border: '1px solid rgba(255, 255, 255, 0.1)',
-                          boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3)',
-                          transition: 'all 0.3s ease',
+                          background: 'rgba(255,255,255,0.06)',
+                          border: '1px solid rgba(255,255,255,0.12)',
+                          borderRadius: 3,
                           height: '100%',
-                          display: 'flex',
-                          flexDirection: 'column',
-                          '&:hover': {
-                            transform: 'translateY(-8px) scale(1.02)',
-                            boxShadow: '0 20px 40px rgba(0, 212, 255, 0.2)',
-                            border: '1px solid rgba(0, 212, 255, 0.3)',
-                          },
                         }}
                       >
-                        <CardContent sx={{ flexGrow: 1, p: 3 }}>
-                          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
-                            <Typography
-                              variant="h6"
-                              sx={{
-                                color: 'white',
-                                fontWeight: 'bold',
-                                fontSize: '1.2rem',
-                                lineHeight: 1.3,
-                                textShadow: '0 0 10px rgba(0, 212, 255, 0.3)',
-                              }}
-                            >
-                              {product.name}
+                        <CardContent sx={{ p: 2.5 }}>
+                          <Thumb src={p.image_url} alt={p.name} />
+                          <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
+                            <Typography sx={{ color: 'white', fontWeight: 700 }}>
+                              {p.name}
                             </Typography>
-                            <Chip
-                              label={`AI Score: ${product.score ?? 0}`}
-                              size="small"
-                              sx={{
-                                background: 'linear-gradient(45deg, #00d4ff, #ff00ff)',
-                                color: 'white',
-                                fontWeight: 'bold',
-                                fontSize: '0.8rem',
-                              }}
-                            />
+                            {typeof p.score === 'number' && (
+                              <Chip
+                                label={`Score ${p.score.toFixed(2)}`}
+                                size="small"
+                                sx={{ color: 'white', background: 'rgba(0,212,255,0.25)' }}
+                              />
+                            )}
                           </Box>
-
                           <Typography
                             variant="body2"
-                            sx={{ color: 'rgba(255, 255, 255, 0.8)', mb: 2, lineHeight: 1.5 }}
+                            sx={{ color: 'rgba(255,255,255,0.85)', mb: 1.5 }}
                           >
-                            {product.description}
+                            {p.description}
                           </Typography>
-
-                          <Box sx={{ display: 'flex', gap: 1, mb: 2, flexWrap: 'wrap' }}>
-                            <Chip
-                              label={product.category}
-                              size="small"
-                              sx={{
-                                background: 'rgba(0, 212, 255, 0.2)',
-                                color: '#00d4ff',
-                                border: '1px solid rgba(0, 212, 255, 0.3)',
-                                fontWeight: 'bold',
-                              }}
-                            />
+                          <Box sx={{ display: 'flex', gap: 1, mb: 1.5, flexWrap: 'wrap' }}>
+                            {p.category && (
+                              <Chip
+                                label={p.category}
+                                size="small"
+                                sx={{
+                                  color: '#00d4ff',
+                                  background: 'rgba(0,212,255,0.18)',
+                                  border: '1px solid rgba(0,212,255,0.3)',
+                                }}
+                              />
+                            )}
+                            {Number.isFinite(p.eco_rating) && (
+                              <Chip
+                                label={`Eco ★ ${p.eco_rating}`}
+                                size="small"
+                                sx={{
+                                  color: '#00ff88',
+                                  background: 'rgba(0,255,136,0.18)',
+                                  border: '1px solid rgba(0,255,136,0.3)',
+                                }}
+                              />
+                            )}
                           </Box>
-
-                          <Typography
-                            variant="h6"
-                            sx={{
-                              color: '#00ff88',
-                              fontWeight: 'bold',
-                              textAlign: 'right',
-                              textShadow: '0 0 10px rgba(0, 255, 136, 0.3)',
-                            }}
-                          >
-                            💲{product.price}
-                          </Typography>
+                          {p.price != null && (
+                            <Typography
+                              sx={{
+                                color: '#00ff88',
+                                fontWeight: 800,
+                                textAlign: 'right',
+                              }}
+                            >
+                              ${n(p.price, 0).toFixed(2)}
+                            </Typography>
+                          )}
                         </CardContent>
                       </Card>
                     </Zoom>

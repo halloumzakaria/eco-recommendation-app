@@ -1,6 +1,10 @@
-import React, { useEffect, useState } from "react";
+// src/pages/Products.jsx
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import api from "../utils/api";
 import {
+  Box,
+  Grid,
   Card,
   CardContent,
   CardMedia,
@@ -9,51 +13,246 @@ import {
   Dialog,
   DialogTitle,
   DialogContent,
-  TextField,
   DialogActions,
-  Grid,
-  Box,
-  Alert,
-  CircularProgress,
+  TextField,
   FormControl,
   InputLabel,
   Select,
   MenuItem,
+  Slider,
+  Chip,
+  Alert,
+  CircularProgress,
   Pagination,
 } from "@mui/material";
 import { green } from "@mui/material/colors";
 import { Add, Save, Cancel } from "@mui/icons-material";
 
+// -------------------------------------------------------
+// Image helpers
+// -------------------------------------------------------
 const PLACEHOLDER =
   "https://images.unsplash.com/photo-1520975964184-9bcd9a59e2bc?q=80&w=1200&auto=format&fit=crop";
 
-function getImageUrl(image_url) {
+function normalizeImageUrl(image_url) {
   let u = image_url;
-  if (Array.isArray(u)) u = u.find(x => typeof x === "string" && x.length > 3);
-  if (typeof u !== "string" || u.length < 4) return PLACEHOLDER;
+  if (Array.isArray(u)) u = u.find((x) => typeof x === "string" && x.trim().length > 3) || "";
+  if (typeof u !== "string") return "";
+  u = u.trim();
+  if (!u) return "";
   if (u.startsWith("//")) return "https:" + u;
-  if (!/^https?:\/\//i.test(u)) return "https://" + u;
-  return u;
+  if (/^https?:\/\//i.test(u)) return u;
+  // Avoid auto-prefixing non-URLs (prevents infinite 404 loops)
+  return "";
 }
 
+function ImageWithFallback({ src, alt, height = 200, sx }) {
+  const initial = useMemo(() => normalizeImageUrl(src) || PLACEHOLDER, [src]);
+  const [imgSrc, setImgSrc] = useState(initial);
+
+  useEffect(() => {
+    setImgSrc(initial);
+  }, [initial]);
+
+  return (
+    <img
+      src={imgSrc}
+      alt={alt}
+      height={height}
+      loading="lazy"
+      decoding="async"
+      referrerPolicy="no-referrer"
+      style={{
+        objectFit: "cover",
+        backgroundColor: "#eef2f5",
+        width: "100%",
+        display: "block",
+        ...(sx || {}),
+      }}
+      onError={() => {
+        if (imgSrc !== PLACEHOLDER) setImgSrc(PLACEHOLDER);
+      }}
+    />
+  );
+}
+
+// -------------------------------------------------------
+// Page
+// -------------------------------------------------------
 const Products = () => {
-  const [items, setItems] = useState([]);
-  const [page, setPage] = useState(1);
-  const [pageSize] = useState(24);
-  const [total, setTotal] = useState(0);
-  const [totalPages, setTotalPages] = useState(1);
+  const navigate = useNavigate();
+
+  // Auth role (for Add dialog)
+  const user = useMemo(() => {
+    try {
+      return JSON.parse(localStorage.getItem("user") || "{}");
+    } catch {
+      return {};
+    }
+  }, []);
+  const isAdmin = user?.role === "admin";
+
+  // Data
+  const [allItems, setAllItems] = useState([]);
   const [loading, setLoading] = useState(false);
 
-  const [open, setOpen] = useState(false);
+  // Pagination (client-side)
+  const [page, setPage] = useState(1);
+  const pageSize = 24;
+
+  // Filters
+  const [filters, setFilters] = useState({
+    priceRange: [0, 200],
+    ecoRatingRange: [0, 5],
+    category: "",
+    sortBy: "relevance",
+  });
+
+  // Review dialog
+  const [openReview, setOpenReview] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [review, setReview] = useState("");
   const [recommendations, setRecommendations] = useState([]);
 
-  // Add Product states
+  // Add dialog
   const [openAddDialog, setOpenAddDialog] = useState(false);
   const [saving, setSaving] = useState(false);
   const [successMessage, setSuccessMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
+
+  // -------------------------------------------
+  // Load catalog once (big pageSize) for filters
+  // -------------------------------------------
+  const loadAll = useCallback(async () => {
+    setLoading(true);
+    try {
+      // grab many items (server still returns {items, total,...})
+      const { data } = await api.get(`/products?page=1&pageSize=1000`);
+      const items = Array.isArray(data?.items) ? data.items : [];
+      setAllItems(items);
+      // initialize price slider from data
+      const prices = items.map((p) => Number(p.price) || 0);
+      if (prices.length) {
+        const min = Math.floor(Math.min(...prices));
+        const max = Math.ceil(Math.max(...prices));
+        setFilters((f) => ({
+          ...f,
+          priceRange: [min, Math.max(max, min)],
+        }));
+      }
+    } catch (e) {
+      console.error("❌ Error loading products:", e);
+      setAllItems([]);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadAll();
+  }, [loadAll]);
+
+  // Derived sets
+  const categories = useMemo(() => {
+    return Array.from(
+      new Set(
+        allItems
+          .map((p) => (p.category || "").trim())
+          .filter(Boolean)
+      )
+    ).sort((a, b) => a.localeCompare(b));
+  }, [allItems]);
+
+  // -------------------------------------------
+  // Apply filters + sorting
+  // -------------------------------------------
+  const filteredSorted = useMemo(() => {
+    const filtered = allItems.filter((p) => {
+      const price = Number(p.price) || 0;
+      const eco = Number(p.eco_rating) || 0;
+      if (price < filters.priceRange[0] || price > filters.priceRange[1]) return false;
+      if (eco < filters.ecoRatingRange[0] || eco > filters.ecoRatingRange[1]) return false;
+      if (filters.category && (p.category || "") !== filters.category) return false;
+      return true;
+    });
+
+    const arr = [...filtered];
+    switch (filters.sortBy) {
+      case "price-low":
+        arr.sort((a, b) => (Number(a.price) || 0) - (Number(b.price) || 0));
+        break;
+      case "price-high":
+        arr.sort((a, b) => (Number(b.price) || 0) - (Number(a.price) || 0));
+        break;
+      case "eco-rating":
+        arr.sort((a, b) => (Number(b.eco_rating) || 0) - (Number(a.eco_rating) || 0));
+        break;
+      case "name":
+        arr.sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+        break;
+      default:
+        // relevance: keep current order
+        break;
+    }
+    return arr;
+  }, [allItems, filters]);
+
+  // Client-side pagination for the filtered result
+  const totalFiltered = filteredSorted.length;
+  const totalPages = Math.max(Math.ceil(totalFiltered / pageSize), 1);
+  const pageItems = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return filteredSorted.slice(start, start + pageSize);
+  }, [filteredSorted, page]);
+
+  // Reset to page 1 when filters change
+  useEffect(() => {
+    setPage(1);
+  }, [filters.category, filters.priceRange, filters.ecoRatingRange, filters.sortBy]);
+
+  // -------------------------------------------
+  // Review flow
+  // -------------------------------------------
+  const fetchRecommendations = useCallback(async (productId) => {
+    try {
+      const userId = localStorage.getItem("userId");
+      const base = process.env.REACT_APP_NLP_API_URL || "http://localhost:5003";
+      const response = await api.get(`${base}/recommend?user_id=${userId}&product_id=${productId}`);
+      setRecommendations(response?.data?.recommendations || []);
+    } catch (error) {
+      console.error("❌ Error fetching recommendations:", error);
+      setRecommendations([]);
+    }
+  }, []);
+
+  const openReviewDialog = (product) => {
+    setSelectedProduct(product);
+    setOpenReview(true);
+    fetchRecommendations(product.id);
+  };
+  const closeReviewDialog = () => {
+    setOpenReview(false);
+    setReview("");
+    setRecommendations([]);
+  };
+  const submitReview = async () => {
+    if (!selectedProduct || review.trim() === "") {
+      alert("Please enter a review!");
+      return;
+    }
+    try {
+      await api.post(`/products/${selectedProduct.id}/review`, { review });
+      alert("Thank you for your review!");
+      closeReviewDialog();
+    } catch (error) {
+      console.error("❌ Error submitting review:", error);
+      alert("Failed to submit review. Please try again.");
+    }
+  };
+
+  // -------------------------------------------
+  // Add product (admin)
+  // -------------------------------------------
   const [newProduct, setNewProduct] = useState({
     name: "",
     description: "",
@@ -63,75 +262,7 @@ const Products = () => {
     image_url: "",
   });
 
-  const user = JSON.parse(localStorage.getItem("user") || "{}");
-  const isAdmin = user.role === "admin";
-
-  // -------- Load products (paginated) ----------
-  async function loadProducts(p = 1) {
-    try {
-      setLoading(true);
-      const { data } = await api.get(`/products?page=${p}&pageSize=${pageSize}`);
-      setItems(Array.isArray(data?.items) ? data.items : []);
-      setTotal(data?.total ?? 0);
-      setTotalPages(data?.totalPages ?? 1);
-      setPage(data?.page ?? p);
-    } catch (e) {
-      console.error("❌ Error fetching products:", e);
-      setItems([]);
-      setTotal(0);
-      setTotalPages(1);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    loadProducts(1);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // -------- Recommendations ----------
-  const fetchRecommendations = async (productId) => {
-    try {
-      const userId = localStorage.getItem("userId");
-      const response = await api.get(
-        `${process.env.REACT_APP_NLP_API_URL || "http://localhost:5003"}/recommend?user_id=${userId}&product_id=${productId}`
-      );
-      setRecommendations(response.data.recommendations || []);
-    } catch (error) {
-      console.error("❌ Error fetching recommendations:", error);
-      setRecommendations([]);
-    }
-  };
-
-  // -------- Review Dialog ----------
-  const handleOpen = (product) => {
-    setSelectedProduct(product);
-    setOpen(true);
-    fetchRecommendations(product.id);
-  };
-  const handleClose = () => {
-    setOpen(false);
-    setReview("");
-    setRecommendations([]);
-  };
-  const handleSubmitReview = async () => {
-    if (!selectedProduct || review.trim() === "") {
-      alert("Please enter a review!");
-      return;
-    }
-    try {
-      await api.post(`/products/${selectedProduct.id}/review`, { review });
-      alert("Thank you for your review!");
-      handleClose();
-    } catch (error) {
-      console.error("❌ Error submitting review:", error);
-      alert("Failed to submit review. Please try again.");
-    }
-  };
-
-  // -------- Add Product Dialog ----------
-  const handleAddProduct = () => {
+  const openAdd = () => {
     setOpenAddDialog(true);
     setNewProduct({
       name: "",
@@ -144,25 +275,24 @@ const Products = () => {
     setErrorMessage("");
     setSuccessMessage("");
   };
-  const handleCloseAddDialog = () => {
+  const closeAdd = () => {
     setOpenAddDialog(false);
     setErrorMessage("");
     setSuccessMessage("");
   };
-  const handleInputChange = (e) => {
+  const onAddChange = (e) => {
     const { name, value } = e.target;
     setNewProduct((prev) => ({ ...prev, [name]: value }));
   };
-  const handleSubmitProduct = async () => {
+  const submitAdd = async () => {
     if (
       !newProduct.name ||
       !newProduct.description ||
       !newProduct.price ||
-      !newProduct.category ||
       !newProduct.eco_rating ||
       !newProduct.image_url
     ) {
-      setErrorMessage("Please fill in all fields!");
+      setErrorMessage("Please fill in all required fields!");
       return;
     }
     if (isNaN(parseFloat(newProduct.price)) || parseFloat(newProduct.price) <= 0) {
@@ -182,25 +312,18 @@ const Products = () => {
       setSaving(true);
       setErrorMessage("");
 
-      const productData = {
+      const payload = {
         name: newProduct.name,
         description: newProduct.description,
         price: parseFloat(newProduct.price),
-        // compat: ton backend « produits (nouveau schéma) » ne stocke pas category texte,
-        // mais c’est ok pour l’instant si tu veux juste l’afficher côté front.
         eco_rating: parseFloat(newProduct.eco_rating),
         image_url: newProduct.image_url,
       };
 
-      await api.post("/products", productData);
+      await api.post("/products", payload);
       setSuccessMessage("Product added successfully!");
-
-      // Recharge la 1ère page (ou la page courante)
-      await loadProducts(1);
-
-      setTimeout(() => {
-        handleCloseAddDialog();
-      }, 1200);
+      await loadAll();
+      setTimeout(() => closeAdd(), 1000);
     } catch (error) {
       console.error("❌ Error creating product:", error);
       setErrorMessage(error.response?.data?.error || "Failed to create product. Please try again.");
@@ -209,8 +332,16 @@ const Products = () => {
     }
   };
 
+  // -------------------------------------------
+  // Navigation → product details
+  // -------------------------------------------
+  const goToDetails = (id) => navigate(`/products/${id}`);
+
+  // -------------------------------------------
+  // UI
+  // -------------------------------------------
   return (
-    <Box sx={{ padding: "20px", backgroundColor: "#f7f9fc", minHeight: "100vh" }}>
+    <Box sx={{ padding: 3, backgroundColor: "#f7f9fc", minHeight: "100vh" }}>
       <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
         <Typography variant="h4" sx={{ color: green[800], fontWeight: "bold" }}>
           🌱 Ecosphere Products
@@ -219,7 +350,7 @@ const Products = () => {
           <Button
             variant="contained"
             startIcon={<Add />}
-            onClick={handleAddProduct}
+            onClick={openAdd}
             sx={{ bgcolor: green[700], "&:hover": { bgcolor: green[800] } }}
           >
             Add Product
@@ -227,67 +358,169 @@ const Products = () => {
         )}
       </Box>
 
-      {/* Top status + pagination */}
+      {/* Filters Card */}
+      <Box
+        sx={{
+          mb: 3,
+          p: 2.5,
+          border: "1px solid #e5e7eb",
+          borderRadius: 2,
+          backgroundColor: "#fff",
+        }}
+      >
+        <Grid container spacing={2}>
+          {/* Price */}
+          <Grid item xs={12} md={4}>
+            <Typography variant="subtitle2" sx={{ mb: 1, color: "#374151" }}>
+              Price (${filters.priceRange[0]} – ${filters.priceRange[1]})
+            </Typography>
+            <Slider
+              value={filters.priceRange}
+              onChange={(_, v) => setFilters((f) => ({ ...f, priceRange: v }))}
+              valueLabelDisplay="auto"
+              min={Math.min(filters.priceRange[0], 0)}
+              max={Math.max(filters.priceRange[1], 200)}
+              sx={{ mt: 3 }}
+            />
+          </Grid>
+
+          {/* Eco Rating */}
+          <Grid item xs={12} md={4}>
+            <Typography variant="subtitle2" sx={{ mb: 1, color: "#374151" }}>
+              Eco Rating ({filters.ecoRatingRange[0]} – {filters.ecoRatingRange[1]})
+            </Typography>
+            <Slider
+              value={filters.ecoRatingRange}
+              onChange={(_, v) => setFilters((f) => ({ ...f, ecoRatingRange: v }))}
+              valueLabelDisplay="auto"
+              min={0}
+              max={5}
+              step={0.1}
+              sx={{ mt: 3 }}
+            />
+          </Grid>
+
+          {/* Category */}
+          <Grid item xs={12} md={2}>
+            <FormControl fullWidth>
+              <InputLabel>Category</InputLabel>
+              <Select
+                label="Category"
+                value={filters.category}
+                onChange={(e) => setFilters((f) => ({ ...f, category: e.target.value }))}
+              >
+                <MenuItem value="">All</MenuItem>
+                {categories.map((c) => (
+                  <MenuItem key={c} value={c}>
+                    {c}
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+          </Grid>
+
+          {/* Sort */}
+          <Grid item xs={12} md={2}>
+            <FormControl fullWidth>
+              <InputLabel>Sort By</InputLabel>
+              <Select
+                label="Sort By"
+                value={filters.sortBy}
+                onChange={(e) => setFilters((f) => ({ ...f, sortBy: e.target.value }))}
+              >
+                <MenuItem value="relevance">Relevance</MenuItem>
+                <MenuItem value="price-low">Price: Low → High</MenuItem>
+                <MenuItem value="price-high">Price: High → Low</MenuItem>
+                <MenuItem value="eco-rating">Eco Rating</MenuItem>
+                <MenuItem value="name">Name A–Z</MenuItem>
+              </Select>
+            </FormControl>
+          </Grid>
+        </Grid>
+
+        {/* Active filters chips */}
+        <Box sx={{ mt: 2, display: "flex", gap: 1, flexWrap: "wrap" }}>
+          {filters.category && (
+            <Chip
+              label={`Category: ${filters.category}`}
+              onDelete={() => setFilters((f) => ({ ...f, category: "" }))}
+            />
+          )}
+          {(filters.sortBy && filters.sortBy !== "relevance") && (
+            <Chip
+              label={`Sort: ${filters.sortBy}`}
+              onDelete={() => setFilters((f) => ({ ...f, sortBy: "relevance" }))}
+            />
+          )}
+        </Box>
+      </Box>
+
+      {/* Status + pagination */}
       <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mb: 2 }}>
         <Typography variant="body1" sx={{ color: green[700] }}>
-          {loading ? "Loading…" : `Showing ${items.length} of ${total} products`}
+          {loading ? "Loading…" : `Showing ${pageItems.length} of ${totalFiltered} products`}
         </Typography>
         <Pagination
           color="primary"
           page={page}
           count={totalPages}
-          onChange={(_e, p) => loadProducts(p)}
+          onChange={(_e, p) => setPage(p)}
         />
       </Box>
 
+      {/* Grid */}
       {loading ? (
         <Box sx={{ display: "flex", justifyContent: "center", py: 8 }}>
           <CircularProgress />
         </Box>
       ) : (
-        <Grid container spacing={4}>
-          {items.map((product) => (
+        <Grid container spacing={3}>
+          {pageItems.map((product) => (
             <Grid item xs={12} sm={6} md={4} lg={3} key={product.id}>
               <Card
+                onClick={() => goToDetails(product.id)}
                 sx={{
-                  boxShadow: 3,
-                  borderRadius: "15px",
-                  transition: "transform 0.3s ease-in-out",
-                  "&:hover": { transform: "scale(1.03)" },
                   height: "100%",
                   display: "flex",
                   flexDirection: "column",
+                  cursor: "pointer",
+                  borderRadius: 2,
+                  transition: "transform .18s ease, box-shadow .18s ease",
+                  "&:hover": { transform: "translateY(-3px)", boxShadow: 6 },
                 }}
               >
                 <CardMedia
-                  component="img"
-                  height="200"
-                  image={getImageUrl(product.image_url)}
+                  component={ImageWithFallback}
+                  src={product.image_url}
                   alt={product.name}
-                  loading="lazy"
-                  onError={(e) => {
-                    e.currentTarget.src = PLACEHOLDER;
-                  }}
-                  sx={{ objectFit: "cover", bgcolor: "#eef2f5" }}
+                  height={200}
                 />
-
                 <CardContent sx={{ flexGrow: 1 }}>
-                  <Typography gutterBottom variant="h6" sx={{ color: green[700], fontWeight: "bold" }}>
+                  <Typography variant="h6" sx={{ color: green[800], fontWeight: 700 }}>
                     {product.name}
                   </Typography>
-                  <Typography variant="body2" color="text.secondary">
+                  <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
                     {product.description}
                   </Typography>
-                  <Typography variant="h6" sx={{ color: green[800], mt: 1 }}>
+                  {product.category && (
+                    <Chip
+                      label={product.category}
+                      size="small"
+                      sx={{ mb: 1, bgcolor: "#e8f5e9", color: green[900], fontWeight: 600 }}
+                    />
+                  )}
+                  <Typography variant="h6" sx={{ color: green[800] }}>
                     💲{Number(product.price ?? 0).toFixed(2)}
                   </Typography>
                   <Typography variant="body2">🌟 Eco Rating: {product.eco_rating ?? "—"} / 5</Typography>
-                  <Typography variant="body2">👀 Views: {product.views ?? 0}</Typography>
 
                   <Button
                     variant="contained"
-                    sx={{ mt: 1, backgroundColor: green[700], color: "white" }}
-                    onClick={() => handleOpen(product)}
+                    sx={{ mt: 1.5, backgroundColor: green[700], "&:hover": { bgcolor: green[800] } }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openReviewDialog(product);
+                    }}
                   >
                     Leave a Review
                   </Button>
@@ -301,12 +534,12 @@ const Products = () => {
       {/* Bottom pagination */}
       {!loading && totalPages > 1 && (
         <Box sx={{ display: "flex", justifyContent: "center", mt: 4 }}>
-          <Pagination color="primary" page={page} count={totalPages} onChange={(_e, p) => loadProducts(p)} />
+          <Pagination color="primary" page={page} count={totalPages} onChange={(_e, p) => setPage(p)} />
         </Box>
       )}
 
-      {/* Review Popup */}
-      <Dialog open={open} onClose={handleClose} maxWidth="sm" fullWidth>
+      {/* Review Dialog */}
+      <Dialog open={openReview} onClose={closeReviewDialog} maxWidth="sm" fullWidth>
         <DialogTitle>Leave a Review</DialogTitle>
         <DialogContent>
           <TextField
@@ -322,29 +555,29 @@ const Products = () => {
           />
         </DialogContent>
         <DialogActions>
-          <Button onClick={handleClose} sx={{ color: "gray" }}>
+          <Button onClick={closeReviewDialog} sx={{ color: "gray" }} startIcon={<Cancel />}>
             Cancel
           </Button>
-          <Button onClick={handleSubmitReview} sx={{ backgroundColor: green[700], color: "white" }}>
+          <Button onClick={submitReview} sx={{ backgroundColor: green[700], color: "white" }} startIcon={<Save />}>
             Submit
           </Button>
         </DialogActions>
 
         <DialogContent>
-          {recommendations && recommendations.length > 0 ? (
+          {Array.isArray(recommendations) && recommendations.length > 0 ? (
             <>
               <Typography variant="h6" sx={{ mt: 2, mb: 2, color: green[800] }}>
-                🔗 Recommended Products:
+                🔗 Recommended Products
               </Typography>
               <Grid container spacing={2}>
                 {recommendations.map((rec) => (
-                  <Grid item xs={12} key={rec.id}>
+                  <Grid item xs={12} key={rec.product_id ?? rec.id ?? `${rec.name}-${rec.price}`}>
                     <Card sx={{ boxShadow: 1, borderRadius: "10px", backgroundColor: "#e8f5e9" }}>
                       <CardContent>
                         <Typography variant="subtitle1" sx={{ color: green[700], fontWeight: "bold" }}>
                           {rec.name}
                         </Typography>
-                        <Typography variant="body2">💲 {rec.price}</Typography>
+                        <Typography variant="body2">💲 {Number(rec.price ?? 0).toFixed(2)}</Typography>
                       </CardContent>
                     </Card>
                   </Grid>
@@ -360,15 +593,30 @@ const Products = () => {
       </Dialog>
 
       {/* Add Product Dialog */}
-      <Dialog open={openAddDialog} onClose={handleCloseAddDialog} maxWidth="md" fullWidth>
+      <Dialog open={openAddDialog} onClose={closeAdd} maxWidth="md" fullWidth>
         <DialogTitle>Add New Product</DialogTitle>
         <DialogContent>
-          {successMessage && <Alert severity="success" sx={{ mb: 2 }}>{successMessage}</Alert>}
-          {errorMessage && <Alert severity="error" sx={{ mb: 2 }}>{errorMessage}</Alert>}
+          {successMessage && (
+            <Alert severity="success" sx={{ mb: 2 }}>
+              {successMessage}
+            </Alert>
+          )}
+          {errorMessage && (
+            <Alert severity="error" sx={{ mb: 2 }}>
+              {errorMessage}
+            </Alert>
+          )}
 
           <Grid container spacing={2} sx={{ mt: 1 }}>
             <Grid item xs={12}>
-              <TextField fullWidth label="Product Name" name="name" value={newProduct.name} onChange={handleInputChange} required />
+              <TextField
+                fullWidth
+                label="Product Name"
+                name="name"
+                value={newProduct.name}
+                onChange={onAddChange}
+                required
+              />
             </Grid>
             <Grid item xs={12}>
               <TextField
@@ -376,7 +624,7 @@ const Products = () => {
                 label="Description"
                 name="description"
                 value={newProduct.description}
-                onChange={handleInputChange}
+                onChange={onAddChange}
                 multiline
                 rows={3}
                 required
@@ -389,22 +637,26 @@ const Products = () => {
                 name="price"
                 type="number"
                 value={newProduct.price}
-                onChange={handleInputChange}
+                onChange={onAddChange}
                 inputProps={{ min: 0, step: 0.01 }}
                 required
               />
             </Grid>
             <Grid item xs={12} sm={6}>
-              <FormControl fullWidth required>
-                <InputLabel>Category</InputLabel>
-                <Select name="category" value={newProduct.category} onChange={handleInputChange} label="Category">
-                  <MenuItem value="Personal Care">Personal Care</MenuItem>
-                  <MenuItem value="Kitchen">Kitchen</MenuItem>
-                  <MenuItem value="Bathroom">Bathroom</MenuItem>
-                  <MenuItem value="Oral Care">Oral Care</MenuItem>
-                  <MenuItem value="Hair Care">Hair Care</MenuItem>
-                  <MenuItem value="Cleaning">Cleaning</MenuItem>
-                  <MenuItem value="Other">Other</MenuItem>
+              <FormControl fullWidth>
+                <InputLabel>Category (display only)</InputLabel>
+                <Select
+                  name="category"
+                  value={newProduct.category}
+                  onChange={onAddChange}
+                  label="Category (display only)"
+                >
+                  <MenuItem value="">—</MenuItem>
+                  {categories.map((c) => (
+                    <MenuItem key={c} value={c}>
+                      {c}
+                    </MenuItem>
+                  ))}
                 </Select>
               </FormControl>
             </Grid>
@@ -415,7 +667,7 @@ const Products = () => {
                 name="eco_rating"
                 type="number"
                 value={newProduct.eco_rating}
-                onChange={handleInputChange}
+                onChange={onAddChange}
                 inputProps={{ min: 1, max: 5, step: 0.1 }}
                 required
               />
@@ -426,7 +678,7 @@ const Products = () => {
                 label="Image URL"
                 name="image_url"
                 value={newProduct.image_url}
-                onChange={handleInputChange}
+                onChange={onAddChange}
                 placeholder="https://example.com/image.jpg"
                 required
               />
@@ -434,11 +686,11 @@ const Products = () => {
           </Grid>
         </DialogContent>
         <DialogActions>
-          <Button onClick={handleCloseAddDialog} startIcon={<Cancel />} disabled={saving}>
+          <Button onClick={closeAdd} startIcon={<Cancel />} disabled={saving}>
             Cancel
           </Button>
           <Button
-            onClick={handleSubmitProduct}
+            onClick={submitAdd}
             variant="contained"
             startIcon={saving ? <CircularProgress size={20} /> : <Save />}
             disabled={saving}
