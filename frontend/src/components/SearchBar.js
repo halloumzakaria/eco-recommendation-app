@@ -17,10 +17,9 @@ import {
   InputLabel,
   Select,
   MenuItem,
-  Switch,
-  FormControlLabel
+  // Switch, FormControlLabel // (not used; remove if you like)
 } from '@mui/material';
-import { green, blue, purple, cyan } from '@mui/material/colors';
+import { green } from '@mui/material/colors';
 import api from '../utils/api';
 
 const SUGGESTIONS = [
@@ -33,10 +32,9 @@ const SUGGESTIONS = [
   'cotton bags',
 ];
 
-// Available categories based on your database
 const CATEGORIES = [
   'hygiène',
-  'cuisine', 
+  'cuisine',
   'accessoire',
   'décoration',
   'sport',
@@ -53,8 +51,7 @@ const SearchBar = () => {
   const [error, setError] = useState('');
   const [typing, setTyping] = useState(false);
   const [aiThinking, setAiThinking] = useState(false);
-  
-  // Filter states
+
   const [filters, setFilters] = useState({
     priceRange: [0, 200],
     ecoRatingRange: [0, 5],
@@ -62,22 +59,6 @@ const SearchBar = () => {
     sortBy: 'relevance'
   });
 
-  // Couleurs pour les catégories
-  const getCategoryColor = (category) => {
-    const colors = {
-      'hygiène': green[100],
-      'cuisine': '#e3f2fd',
-      'accessoire': '#f3e5f5',
-      'décoration': '#fff3e0',
-      'sport': '#e8f5e8',
-      'maison': '#fce4ec',
-      'jardinage': '#e0f2f1',
-      'kit': '#f1f8e9',
-    };
-    return colors[category] || '#f5f5f5';
-  };
-
-  // AI typing animation effect
   useEffect(() => {
     if (query.length > 0) {
       setTyping(true);
@@ -86,31 +67,19 @@ const SearchBar = () => {
     }
   }, [query]);
 
-  // Apply filters to results
-  const applyFilters = (products) => {
-    return products.filter(product => {
-      // Price filter
+  const applyFilters = (products) =>
+    products.filter((product) => {
       const price = parseFloat(product.price) || 0;
-      if (price < filters.priceRange[0] || price > filters.priceRange[1]) {
-        return false;
-      }
+      if (price < filters.priceRange[0] || price > filters.priceRange[1]) return false;
 
-      // Eco rating filter
       const ecoRating = parseFloat(product.eco_rating) || 0;
-      if (ecoRating < filters.ecoRatingRange[0] || ecoRating > filters.ecoRatingRange[1]) {
-        return false;
-      }
+      if (ecoRating < filters.ecoRatingRange[0] || ecoRating > filters.ecoRatingRange[1]) return false;
 
-      // Category filter
-      if (filters.category && product.category !== filters.category) {
-        return false;
-      }
+      if (filters.category && product.category !== filters.category) return false;
 
       return true;
     });
-  };
 
-  // Sort results
   const sortResults = (products) => {
     const sorted = [...products];
     switch (filters.sortBy) {
@@ -123,48 +92,23 @@ const SearchBar = () => {
       case 'name':
         return sorted.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
       default:
-        return sorted; // relevance - keep original order
+        return sorted; // relevance
     }
   };
 
-  // Handle filter changes
-  const handleFilterChange = (filterName, value) => {
-    setFilters(prev => ({
-      ...prev,
-      [filterName]: value
-    }));
-  };
+  const handleFilterChange = (name, value) => setFilters((p) => ({ ...p, [name]: value }));
 
-  // Clear all filters
-  const clearFilters = () => {
-    setFilters({
-      priceRange: [0, 200],
-      ecoRatingRange: [0, 5],
-      category: '',
-      sortBy: 'relevance'
-    });
-  };
+  const clearFilters = () =>
+    setFilters({ priceRange: [0, 200], ecoRatingRange: [0, 5], category: '', sortBy: 'relevance' });
 
-  // Load all products for filtering
   const loadAllProducts = async () => {
     setLoading(true);
     setError('');
-
     try {
-      console.log('🔍 Loading products using same method as Products page...');
-      
-      // Use the same approach as Products page
       const { data } = await api.get('/products?page=1&pageSize=1000');
-      console.log('📦 API response data:', data);
-      
       const normalized = Array.isArray(data?.items) ? data.items : [];
-      console.log('📦 Products loaded:', normalized.length);
-
-      // Apply filters and sorting
       const filtered = applyFilters(normalized);
       const sorted = sortResults(filtered);
-      
-      console.log('📦 After filtering:', filtered.length);
       setResults(sorted);
       setHasSearched(true);
     } catch (e) {
@@ -176,11 +120,9 @@ const SearchBar = () => {
     }
   };
 
-  // Launch AI search (optionally with a query passed as parameter)
   const handleSearch = async (qOverride) => {
     const q = typeof qOverride === 'string' ? qOverride : query;
     if (!q.trim()) {
-      // If no query, load all products with filters
       await loadAllProducts();
       return;
     }
@@ -190,25 +132,14 @@ const SearchBar = () => {
     setHasSearched(true);
     setError('');
 
-    // Simulate AI thinking time for better UX
-    await new Promise(resolve => setTimeout(resolve, 800));
+    await new Promise((r) => setTimeout(r, 800)); // UX shimmer
 
     try {
       const res = await api.get(`/products/search?q=${encodeURIComponent(q)}`);
-
-      // Security: backend returns { results: [...] }; protect against unexpected responses
       const data = res?.data;
-      const normalized =
-        Array.isArray(data?.results)
-          ? data.results
-          : Array.isArray(data)
-          ? data
-          : [];
-
-      // Apply filters and sorting
+      const normalized = Array.isArray(data?.results) ? data.results : Array.isArray(data) ? data : [];
       const filtered = applyFilters(normalized);
       const sorted = sortResults(filtered);
-      
       setResults(sorted);
     } catch (e) {
       console.error('Search error:', e);
@@ -220,20 +151,19 @@ const SearchBar = () => {
     }
   };
 
-  const handleKeyDown = (event) => {
-    if (event.key === 'Enter') {
-      event.preventDefault();
+  const handleKeyDown = (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
       handleSearch();
     }
   };
 
-  // Pour éviter les crashes dans le rendu, on force un tableau
   const safeResults = Array.isArray(results) ? results : [];
   const count = safeResults.length;
 
   return (
-    <Box 
-      sx={{ 
+    <Box
+      sx={{
         minHeight: '100vh',
         background: 'linear-gradient(135deg, #0f0f23 0%, #1a1a2e 50%, #16213e 100%)',
         position: 'relative',
@@ -241,10 +171,7 @@ const SearchBar = () => {
         '&::before': {
           content: '""',
           position: 'absolute',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
+          inset: 0,
           background: `
             radial-gradient(circle at 20% 80%, rgba(120, 119, 198, 0.3) 0%, transparent 50%),
             radial-gradient(circle at 80% 20%, rgba(255, 119, 198, 0.3) 0%, transparent 50%),
@@ -255,17 +182,14 @@ const SearchBar = () => {
         '@keyframes pulse': {
           '0%': { opacity: 0.5 },
           '100%': { opacity: 0.8 },
-        }
+        },
       }}
     >
-      {/* Animated background particles */}
+      {/* Background particles */}
       <Box
         sx={{
           position: 'absolute',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
+          inset: 0,
           background: `
             radial-gradient(2px 2px at 20px 30px, #eee, transparent),
             radial-gradient(2px 2px at 40px 70px, rgba(255,255,255,0.5), transparent),
@@ -280,12 +204,12 @@ const SearchBar = () => {
           '@keyframes float': {
             '0%, 100%': { transform: 'translateY(0px)' },
             '50%': { transform: 'translateY(-20px)' },
-          }
+          },
         }}
       />
 
-      <Box sx={{ position: 'relative', zIndex: 1, padding: 4 }}>
-        {/* AI Header */}
+      <Box sx={{ position: 'relative', zIndex: 1, p: 4 }}>
+        {/* Header */}
         <Fade in timeout={1000}>
           <Box sx={{ textAlign: 'center', mb: 6 }}>
             <Typography
@@ -303,7 +227,7 @@ const SearchBar = () => {
                 '@keyframes glow': {
                   '0%': { textShadow: '0 0 30px rgba(0, 212, 255, 0.5)' },
                   '100%': { textShadow: '0 0 40px rgba(255, 0, 255, 0.8)' },
-                }
+                },
               }}
             >
               🤖 AI Product Search
@@ -319,17 +243,17 @@ const SearchBar = () => {
               }}
             >
               Powered by advanced AI algorithms to find the perfect eco-friendly products for you
-      </Typography>
+            </Typography>
           </Box>
         </Fade>
 
-        {/* AI Search Interface */}
+        {/* Search bar */}
         <Fade in timeout={1500}>
           <Box sx={{ maxWidth: 800, mx: 'auto', mb: 6 }}>
-            <Box 
-              sx={{ 
-                display: 'flex', 
-                gap: 2, 
+            <Box
+              sx={{
+                display: 'flex',
+                gap: 2,
                 alignItems: 'center',
                 background: 'rgba(255, 255, 255, 0.05)',
                 backdropFilter: 'blur(10px)',
@@ -339,24 +263,20 @@ const SearchBar = () => {
                 boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3)',
               }}
             >
-        <TextField
-          fullWidth
-          variant="outlined"
+              <TextField
+                fullWidth
+                variant="outlined"
                 placeholder="Ask AI to find eco-friendly products... (e.g., 'sustainable hair care', 'zero waste kitchen')"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={handleKeyDown}
-          sx={{
-            '& .MuiOutlinedInput-root': {
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={handleKeyDown}
+                sx={{
+                  '& .MuiOutlinedInput-root': {
                     backgroundColor: 'rgba(255, 255, 255, 0.1)',
                     borderRadius: 3,
                     color: 'white',
-                    '& fieldset': {
-                      borderColor: 'rgba(255, 255, 255, 0.2)',
-                    },
-                    '&:hover fieldset': {
-                      borderColor: 'rgba(0, 212, 255, 0.5)',
-                    },
+                    '& fieldset': { borderColor: 'rgba(255, 255, 255, 0.2)' },
+                    '&:hover fieldset': { borderColor: 'rgba(0, 212, 255, 0.5)' },
                     '&.Mui-focused fieldset': {
                       borderColor: '#00d4ff',
                       boxShadow: '0 0 20px rgba(0, 212, 255, 0.3)',
@@ -364,20 +284,18 @@ const SearchBar = () => {
                   },
                   '& .MuiInputBase-input': {
                     color: 'white',
-                    '&::placeholder': {
-                      color: 'rgba(255, 255, 255, 0.6)',
-                    },
-            },
-          }}
-        />
-        <Button
-          variant="contained"
-          onClick={() => handleSearch()}
-          disabled={loading}
-          sx={{
+                    '&::placeholder': { color: 'rgba(255, 255, 255, 0.6)' },
+                  },
+                }}
+              />
+              <Button
+                variant="contained"
+                onClick={() => handleSearch()}
+                disabled={loading}
+                sx={{
                   background: 'linear-gradient(45deg, #00d4ff, #ff00ff)',
                   minWidth: 140,
-            height: 56,
+                  height: 56,
                   borderRadius: 3,
                   fontWeight: 'bold',
                   textTransform: 'none',
@@ -403,38 +321,36 @@ const SearchBar = () => {
                 ) : (
                   '🚀 Search'
                 )}
-        </Button>
-      </Box>
+              </Button>
+            </Box>
 
-            {/* AI Thinking Indicator */}
             {aiThinking && (
               <Box sx={{ mt: 2, textAlign: 'center' }}>
                 <Typography variant="body2" sx={{ color: 'rgba(255, 255, 255, 0.7)', mb: 1 }}>
                   AI is analyzing your request...
                 </Typography>
-                <LinearProgress 
-                  sx={{ 
-                    height: 4, 
+                <LinearProgress
+                  sx={{
+                    height: 4,
                     borderRadius: 2,
                     background: 'rgba(255, 255, 255, 0.1)',
                     '& .MuiLinearProgress-bar': {
                       background: 'linear-gradient(45deg, #00d4ff, #ff00ff)',
-                    }
-                  }} 
+                    },
+                  }}
                 />
               </Box>
             )}
 
-            {/* Error Messages */}
-      {error && (
+            {error && (
               <Fade in>
                 <Box sx={{ mt: 2, textAlign: 'center' }}>
-                  <Typography 
-                    variant="body2" 
-                    sx={{ 
+                  <Typography
+                    variant="body2"
+                    sx={{
                       color: '#ff6b6b',
                       background: 'rgba(255, 107, 107, 0.1)',
-                      padding: 2,
+                      p: 2,
                       borderRadius: 2,
                       border: '1px solid rgba(255, 107, 107, 0.3)',
                     }}
@@ -447,11 +363,11 @@ const SearchBar = () => {
           </Box>
         </Fade>
 
-        {/* Mesmerizing AI Filters */}
+        {/* Filters */}
         <Fade in timeout={1000}>
           <Box sx={{ maxWidth: 1000, mx: 'auto', mb: 6 }}>
-            <Box 
-              sx={{ 
+            <Box
+              sx={{
                 background: 'rgba(255, 255, 255, 0.05)',
                 backdropFilter: 'blur(15px)',
                 borderRadius: 3,
@@ -460,33 +376,32 @@ const SearchBar = () => {
                 boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3)',
               }}
             >
-              {/* Professional Header */}
               <Box sx={{ textAlign: 'center', mb: 4 }}>
-                <Typography 
-                  sx={{ 
-                    color: 'white', 
-                    fontWeight: 600, 
+                <Typography
+                  sx={{
+                    color: 'white',
+                    fontWeight: 600,
                     fontSize: '1.8rem',
                     mb: 1,
-                    letterSpacing: '-0.5px'
+                    letterSpacing: '-0.5px',
                   }}
                 >
                   Advanced Filtering
                 </Typography>
-                <Typography 
-                  sx={{ 
-                    color: 'rgba(255, 255, 255, 0.6)', 
+                <Typography
+                  sx={{
+                    color: 'rgba(255, 255, 255, 0.6)',
                     fontSize: '0.95rem',
                     fontWeight: 400,
-                    letterSpacing: '0.3px'
+                    letterSpacing: '0.3px',
                   }}
                 >
                   Refine your search with precision controls
                 </Typography>
               </Box>
-                
+
               <Grid container spacing={4}>
-                {/* Price Range - Professional Design */}
+                {/* Price */}
                 <Grid item xs={12} md={6}>
                   <Box
                     sx={{
@@ -498,25 +413,25 @@ const SearchBar = () => {
                       '&:hover': {
                         borderColor: 'rgba(255, 255, 255, 0.15)',
                         background: 'rgba(255, 255, 255, 0.05)',
-                      }
+                      },
                     }}
                   >
-                    <Typography 
-                      sx={{ 
-                        color: 'white', 
+                    <Typography
+                      sx={{
+                        color: 'white',
                         fontWeight: 500,
                         fontSize: '0.9rem',
                         mb: 2,
                         textTransform: 'uppercase',
-                        letterSpacing: '0.5px'
+                        letterSpacing: '0.5px',
                       }}
                     >
                       Price Range
                     </Typography>
-                    <Typography 
-                      sx={{ 
-                        color: 'rgba(255, 255, 255, 0.8)', 
-                        mb: 3, 
+                    <Typography
+                      sx={{
+                        color: 'rgba(255, 255, 255, 0.8)',
+                        mb: 3,
                         fontWeight: 400,
                         fontSize: '1.1rem',
                         textAlign: 'center',
@@ -526,47 +441,35 @@ const SearchBar = () => {
                     </Typography>
                     <Slider
                       value={filters.priceRange}
-                      onChange={(_, newValue) => handleFilterChange('priceRange', newValue)}
+                      onChange={(_, v) => handleFilterChange('priceRange', v)}
                       valueLabelDisplay="auto"
                       min={0}
                       max={200}
                       sx={{
                         color: '#ffffff',
                         height: 6,
-                        '& .MuiSlider-track': {
-                          background: '#ffffff',
-                          height: 6,
-                          borderRadius: 3,
-                        },
-                        '& .MuiSlider-rail': {
-                          background: 'rgba(255, 255, 255, 0.15)',
-                          height: 6,
-                          borderRadius: 3,
-                        },
+                        '& .MuiSlider-track': { background: '#ffffff', height: 6, borderRadius: 3 },
+                        '& .MuiSlider-rail': { background: 'rgba(255, 255, 255, 0.15)', height: 6, borderRadius: 3 },
                         '& .MuiSlider-thumb': {
                           width: 20,
                           height: 20,
                           background: '#ffffff',
                           border: '2px solid rgba(0, 0, 0, 0.1)',
-                          '&:hover': {
-                            boxShadow: '0 0 0 8px rgba(255, 255, 255, 0.1)',
-                          },
-                          '&.Mui-focusVisible': {
-                            boxShadow: '0 0 0 8px rgba(255, 255, 255, 0.2)',
-                          }
+                          '&:hover': { boxShadow: '0 0 0 8px rgba(255, 255, 255, 0.1)' },
+                          '&.Mui-focusVisible': { boxShadow: '0 0 0 8px rgba(255, 255, 255, 0.2)' },
                         },
                         '& .MuiSlider-valueLabel': {
                           background: 'rgba(0, 0, 0, 0.8)',
                           borderRadius: 2,
                           fontSize: '0.75rem',
                           fontWeight: 500,
-                        }
+                        },
                       }}
                     />
                   </Box>
                 </Grid>
 
-                {/* Eco Rating Range - Professional Design */}
+                {/* Eco Rating */}
                 <Grid item xs={12} md={6}>
                   <Box
                     sx={{
@@ -578,25 +481,25 @@ const SearchBar = () => {
                       '&:hover': {
                         borderColor: 'rgba(255, 255, 255, 0.15)',
                         background: 'rgba(255, 255, 255, 0.05)',
-                      }
+                      },
                     }}
                   >
-                    <Typography 
-                      sx={{ 
-                        color: 'white', 
+                    <Typography
+                      sx={{
+                        color: 'white',
                         fontWeight: 500,
                         fontSize: '0.9rem',
                         mb: 2,
                         textTransform: 'uppercase',
-                        letterSpacing: '0.5px'
+                        letterSpacing: '0.5px',
                       }}
                     >
                       Eco Rating
                     </Typography>
-                    <Typography 
-                      sx={{ 
-                        color: 'rgba(255, 255, 255, 0.8)', 
-                        mb: 3, 
+                    <Typography
+                      sx={{
+                        color: 'rgba(255, 255, 255, 0.8)',
+                        mb: 3,
                         fontWeight: 400,
                         fontSize: '1.1rem',
                         textAlign: 'center',
@@ -606,7 +509,7 @@ const SearchBar = () => {
                     </Typography>
                     <Slider
                       value={filters.ecoRatingRange}
-                      onChange={(_, newValue) => handleFilterChange('ecoRatingRange', newValue)}
+                      onChange={(_, v) => handleFilterChange('ecoRatingRange', v)}
                       valueLabelDisplay="auto"
                       min={0}
                       max={5}
@@ -614,40 +517,28 @@ const SearchBar = () => {
                       sx={{
                         color: '#ffffff',
                         height: 6,
-                        '& .MuiSlider-track': {
-                          background: '#ffffff',
-                          height: 6,
-                          borderRadius: 3,
-                        },
-                        '& .MuiSlider-rail': {
-                          background: 'rgba(255, 255, 255, 0.15)',
-                          height: 6,
-                          borderRadius: 3,
-                        },
+                        '& .MuiSlider-track': { background: '#ffffff', height: 6, borderRadius: 3 },
+                        '& .MuiSlider-rail': { background: 'rgba(255, 255, 255, 0.15)', height: 6, borderRadius: 3 },
                         '& .MuiSlider-thumb': {
                           width: 20,
                           height: 20,
                           background: '#ffffff',
                           border: '2px solid rgba(0, 0, 0, 0.1)',
-                          '&:hover': {
-                            boxShadow: '0 0 0 8px rgba(255, 255, 255, 0.1)',
-                          },
-                          '&.Mui-focusVisible': {
-                            boxShadow: '0 0 0 8px rgba(255, 255, 255, 0.2)',
-                          }
+                          '&:hover': { boxShadow: '0 0 0 8px rgba(255, 255, 255, 0.1)' },
+                          '&.Mui-focusVisible': { boxShadow: '0 0 0 8px rgba(255, 255, 255, 0.2)' },
                         },
                         '& .MuiSlider-valueLabel': {
                           background: 'rgba(0, 0, 0, 0.8)',
                           borderRadius: 2,
                           fontSize: '0.75rem',
                           fontWeight: 500,
-                        }
+                        },
                       }}
                     />
                   </Box>
                 </Grid>
 
-                {/* Category Filter - Professional Design */}
+                {/* Category */}
                 <Grid item xs={12} md={6}>
                   <Box
                     sx={{
@@ -659,26 +550,26 @@ const SearchBar = () => {
                       '&:hover': {
                         borderColor: 'rgba(255, 255, 255, 0.15)',
                         background: 'rgba(255, 255, 255, 0.05)',
-                      }
+                      },
                     }}
                   >
-                    <Typography 
-                      sx={{ 
-                        color: 'white', 
+                    <Typography
+                      sx={{
+                        color: 'white',
                         fontWeight: 500,
                         fontSize: '0.9rem',
                         mb: 2,
                         textTransform: 'uppercase',
-                        letterSpacing: '0.5px'
+                        letterSpacing: '0.5px',
                       }}
                     >
                       Category
                     </Typography>
                     <FormControl fullWidth>
-                      <InputLabel 
-                        sx={{ 
+                      <InputLabel
+                        sx={{
                           color: 'rgba(255, 255, 255, 0.6)',
-                          '&.Mui-focused': { color: 'rgba(255, 255, 255, 0.8)' }
+                          '&.Mui-focused': { color: 'rgba(255, 255, 255, 0.8)' },
                         }}
                       >
                         Select Category
@@ -700,11 +591,11 @@ const SearchBar = () => {
                           },
                           '& .MuiSelect-icon': {
                             color: 'rgba(255, 255, 255, 0.6)',
-                          }
+                          },
                         }}
                       >
                         <MenuItem value="">All Categories</MenuItem>
-                        {CATEGORIES.map(category => (
+                        {CATEGORIES.map((category) => (
                           <MenuItem key={category} value={category}>
                             {category.charAt(0).toUpperCase() + category.slice(1)}
                           </MenuItem>
@@ -714,7 +605,7 @@ const SearchBar = () => {
                   </Box>
                 </Grid>
 
-                {/* Sort By - Professional Design */}
+                {/* Sort By */}
                 <Grid item xs={12} md={6}>
                   <Box
                     sx={{
@@ -726,26 +617,26 @@ const SearchBar = () => {
                       '&:hover': {
                         borderColor: 'rgba(255, 255, 255, 0.15)',
                         background: 'rgba(255, 255, 255, 0.05)',
-                      }
+                      },
                     }}
                   >
-                    <Typography 
-                      sx={{ 
-                        color: 'white', 
+                    <Typography
+                      sx={{
+                        color: 'white',
                         fontWeight: 500,
                         fontSize: '0.9rem',
                         mb: 2,
                         textTransform: 'uppercase',
-                        letterSpacing: '0.5px'
+                        letterSpacing: '0.5px',
                       }}
                     >
                       Sort By
-        </Typography>
+                    </Typography>
                     <FormControl fullWidth>
-                      <InputLabel 
-                        sx={{ 
+                      <InputLabel
+                        sx={{
                           color: 'rgba(255, 255, 255, 0.6)',
-                          '&.Mui-focused': { color: 'rgba(255, 255, 255, 0.8)' }
+                          '&.Mui-focused': { color: 'rgba(255, 255, 255, 0.8)' },
                         }}
                       >
                         Sort Order
@@ -767,7 +658,7 @@ const SearchBar = () => {
                           },
                           '& .MuiSelect-icon': {
                             color: 'rgba(255, 255, 255, 0.6)',
-                          }
+                          },
                         }}
                       >
                         <MenuItem value="relevance">Relevance</MenuItem>
@@ -780,18 +671,9 @@ const SearchBar = () => {
                   </Box>
                 </Grid>
 
-                {/* Professional Action Buttons */}
+                {/* Actions */}
                 <Grid item xs={12}>
-                  <Box 
-                    sx={{ 
-                      display: 'flex', 
-                      gap: 2, 
-                      justifyContent: 'center', 
-                      mt: 4, 
-                      flexWrap: 'wrap',
-                    }}
-                  >
-                    {/* Clear Filters */}
+                  <Box sx={{ display: 'flex', gap: 2, justifyContent: 'center', mt: 4, flexWrap: 'wrap' }}>
                     <Button
                       variant="outlined"
                       onClick={clearFilters}
@@ -815,7 +697,6 @@ const SearchBar = () => {
                       Clear Filters
                     </Button>
 
-                    {/* Load All Products */}
                     <Button
                       variant="contained"
                       onClick={loadAllProducts}
@@ -839,7 +720,6 @@ const SearchBar = () => {
                       Load All Products
                     </Button>
 
-                    {/* Apply Filters */}
                     <Button
                       variant="contained"
                       onClick={() => {
@@ -868,141 +748,136 @@ const SearchBar = () => {
                     </Button>
                   </Box>
                 </Grid>
-                </Grid>
-              </Box>
+              </Grid>
             </Box>
-          </Fade>
-      )}
+          </Box>
+        </Fade>
 
-      {/* Search Results */}
+        {/* Search Results */}
         {(hasSearched || results.length > 0) && (
           <Fade in timeout={1000}>
-        <Box>
-              <Typography 
-                variant="h5" 
-                sx={{ 
-                  textAlign: 'center', 
-                  mb: 4, 
+            <Box>
+              <Typography
+                variant="h5"
+                sx={{
+                  textAlign: 'center',
+                  mb: 4,
                   color: 'white',
                   fontWeight: 'bold',
                   textShadow: '0 0 20px rgba(0, 212, 255, 0.5)',
                 }}
               >
                 {loading ? '🔍 Loading products...' : `✨ Found ${count} products`}
-          </Typography>
+              </Typography>
 
-          {count === 0 && !loading && (
+              {count === 0 && !loading && (
                 <Box sx={{ textAlign: 'center', mt: 4 }}>
-                  <Typography 
-                    variant="h6" 
-                    sx={{ 
-                      color: 'rgba(255, 255, 255, 0.7)', 
+                  <Typography
+                    variant="h6"
+                    sx={{
+                      color: 'rgba(255, 255, 255, 0.7)',
                       mb: 2,
                       background: 'rgba(255, 255, 255, 0.05)',
-                      padding: 3,
+                      p: 3,
                       borderRadius: 3,
                       border: '1px solid rgba(255, 255, 255, 0.1)',
                     }}
                   >
-                    🤖 AI couldn't find matching products. Try different keywords like "sustainable", "eco-friendly", or "zero waste"
-            </Typography>
+                    🤖 AI couldn't find matching products. Try different keywords like
+                    {' '}“sustainable”, “eco-friendly”, or “zero waste”
+                  </Typography>
                 </Box>
-          )}
+              )}
 
               <Grid container spacing={4}>
                 {safeResults.map((product, index) => (
-              <Grid item xs={12} sm={6} md={4} lg={3} key={product.id ?? `${product.name}-${product.category}`}>
+                  <Grid item xs={12} sm={6} md={4} lg={3} key={product.id ?? `${product.name}-${product.category}`}>
                     <Zoom in timeout={500 + index * 100}>
-                <Card
-                  sx={{
+                      <Card
+                        sx={{
                           background: 'rgba(255, 255, 255, 0.05)',
                           backdropFilter: 'blur(10px)',
                           borderRadius: 4,
                           border: '1px solid rgba(255, 255, 255, 0.1)',
                           boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3)',
                           transition: 'all 0.3s ease',
-                    height: '100%',
-                    display: 'flex',
-                    flexDirection: 'column',
-                          '&:hover': { 
+                          height: '100%',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          '&:hover': {
                             transform: 'translateY(-8px) scale(1.02)',
                             boxShadow: '0 20px 40px rgba(0, 212, 255, 0.2)',
                             border: '1px solid rgba(0, 212, 255, 0.3)',
                           },
-                  }}
-                >
+                        }}
+                      >
                         <CardContent sx={{ flexGrow: 1, p: 3 }}>
                           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
-                      <Typography
-                        variant="h6"
-                              sx={{ 
-                                color: 'white', 
-                                fontWeight: 'bold', 
-                                fontSize: '1.2rem', 
+                            <Typography
+                              variant="h6"
+                              sx={{
+                                color: 'white',
+                                fontWeight: 'bold',
+                                fontSize: '1.2rem',
                                 lineHeight: 1.3,
                                 textShadow: '0 0 10px rgba(0, 212, 255, 0.3)',
                               }}
-                      >
-                        {product.name}
-                      </Typography>
-                      <Chip
+                            >
+                              {product.name}
+                            </Typography>
+                            <Chip
                               label={`AI Score: ${product.score ?? 0}`}
-                        size="small"
-                              sx={{ 
+                              size="small"
+                              sx={{
                                 background: 'linear-gradient(45deg, #00d4ff, #ff00ff)',
                                 color: 'white',
                                 fontWeight: 'bold',
                                 fontSize: '0.8rem',
                               }}
-                      />
-                    </Box>
+                            />
+                          </Box>
 
-                          <Typography 
-                            variant="body2" 
-                            sx={{ 
-                              color: 'rgba(255, 255, 255, 0.8)', 
-                              mb: 2,
-                              lineHeight: 1.5,
-                            }}
+                          <Typography
+                            variant="body2"
+                            sx={{ color: 'rgba(255, 255, 255, 0.8)', mb: 2, lineHeight: 1.5 }}
                           >
-                      {product.description}
-                    </Typography>
+                            {product.description}
+                          </Typography>
 
                           <Box sx={{ display: 'flex', gap: 1, mb: 2, flexWrap: 'wrap' }}>
-                      <Chip
-                        label={product.category}
-                        size="small"
-                              sx={{ 
+                            <Chip
+                              label={product.category}
+                              size="small"
+                              sx={{
                                 background: 'rgba(0, 212, 255, 0.2)',
                                 color: '#00d4ff',
                                 border: '1px solid rgba(0, 212, 255, 0.3)',
                                 fontWeight: 'bold',
                               }}
-                      />
-                    </Box>
+                            />
+                          </Box>
 
-                    <Typography
-                      variant="h6"
-                            sx={{ 
-                              color: '#00ff88', 
-                              fontWeight: 'bold', 
+                          <Typography
+                            variant="h6"
+                            sx={{
+                              color: '#00ff88',
+                              fontWeight: 'bold',
                               textAlign: 'right',
                               textShadow: '0 0 10px rgba(0, 255, 136, 0.3)',
                             }}
-                    >
-                      💲{product.price}
-                    </Typography>
-                  </CardContent>
-                </Card>
+                          >
+                            💲{product.price}
+                          </Typography>
+                        </CardContent>
+                      </Card>
                     </Zoom>
+                  </Grid>
+                ))}
               </Grid>
-            ))}
-          </Grid>
-        </Box>
+            </Box>
           </Fade>
         )}
-
-        </Box>
+      </Box>
     </Box>
   );
 };
