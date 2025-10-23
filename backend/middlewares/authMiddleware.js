@@ -1,3 +1,4 @@
+// backend/middlewares/authMiddleware.js
 const jwt = require("jsonwebtoken");
 
 const authMiddleware = (req, res, next) => {
@@ -10,10 +11,12 @@ const authMiddleware = (req, res, next) => {
   const token = authHeader.split(" ")[1];
 
   try {
-    const decoded = jwt.verify(token, process.env.SECRET_KEY || "mon_secret_tres_secure");
+    // Utilise JWT_SECRET (avec fallback sur SECRET_KEY pour compat)
+    const secret = process.env.JWT_SECRET || process.env.SECRET_KEY || "mon_secret_tres_secure";
+    const decoded = jwt.verify(token, secret);
     req.user = decoded;
     next();
-  } catch (err) {
+  } catch (_err) {
     return res.status(401).json({ message: "Invalid token" });
   }
 };

@@ -190,29 +190,77 @@ def analyze_review():
         data = request.json or {}
         product_id = data.get("product_id")
         review_text = data.get("review","")
-        print(f"📝 review for product {product_id}: {review_text}")
+        if not product_id:
+            return jsonify({"ok": False, "error": "MISSING_PRODUCT_ID"}), 400
 
         polarity = TextBlob(review_text).sentiment.polarity
-        print("🧠 polarity:", polarity)
 
         conn = get_db_connection()
         with conn:
-            with conn.cursor() as cur:
-                # 🔁 table snake_case + alias p
-                cur.execute('SELECT p.id FROM "products" p WHERE p.id=%s;', (product_id,))
-                if not cur.fetchone():
+            with conn.cursor(cursor_factory=pgextras.DictCursor) as cur:
+                # infos de base
+                cur.execute('SELECT id, price, category_id, eco_rating FROM "products" WHERE id=%s;', (product_id,))
+                p = cur.fetchone()
+                if not p:
                     return jsonify({"ok": False, "error": "PRODUCT_NOT_FOUND"}), 404
 
-                if polarity > 0.1:
-                    cur.execute('UPDATE "products" SET eco_rating = LEAST(COALESCE(eco_rating,0) + 1, 5) WHERE id=%s;', (product_id,))
-                elif polarity < -0.1:
-                    cur.execute('UPDATE "products" SET eco_rating = GREATEST(COALESCE(eco_rating,0) - 1, 1) WHERE id=%s;', (product_id,))
+                price = float(p["price"] or 0.0)
+                category_id = p.get("category_id")
+
+                # --- affordability (moins cher que la médiane = mieux)
+                afford = 0.0
+                try:
+                    if category_id is not None:
+                        cur.execute("""
+                            SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY price) AS median_price
+                            FROM "products" WHERE category_id=%s AND price IS NOT NULL
+                        """, (category_id,))
+                        r = cur.fetchone()
+                        median_price = float(r["median_price"] or 0.0)
+                        if median_price > 0:
+                            afford = max(-1.0, min(1.0, (median_price - price)/median_price))
+                except Exception:
+                    afford = 0.0
+
+                # --- popularité (ventes normalisées 0..1)
+                pop_norm = 0.0
+                try:
+                    if table_exists(conn, "order_items"):
+                        cur.execute('SELECT COALESCE(SUM(quantity),0)::float AS qty FROM "order_items" WHERE product_id=%s;', (product_id,))
+                        my_qty = float(cur.fetchone()["qty"] or 0.0)
+                        cur.execute('SELECT COALESCE(MAX(sum_qty),0)::float AS max_qty FROM (SELECT product_id, SUM(quantity) AS sum_qty FROM "order_items" GROUP BY product_id) t;')
+                        max_qty = float(cur.fetchone()["max_qty"] or 0.0)
+                        if max_qty > 0:
+                            pop_norm = max(0.0, min(1.0, my_qty/max_qty))
+                except Exception:
+                    pop_norm = 0.0
+
+                # --- base selon polarité
+                if   polarity >= 0.6: base = 0.25
+                elif polarity >= 0.2: base = 0.10
+                elif polarity >  -0.2: base = 0.0
+                elif polarity >= -0.5: base = -0.20   # mauvais = -0.2
+                else:                  base = -1.00   # très mauvais = -1
+
+                # --- amplification seulement si positif
+                if base > 0:
+                    mult = 1.0 + 0.4*pop_norm + 0.3*afford
+                    # cher mais très populaire → petit bonus premium
+                    if afford < 0 and pop_norm >= 0.7:
+                        mult += 0.2
+                    delta = base * mult
+                else:
+                    delta = base
+
+                # --- appliquer 0..5
+                cur.execute('UPDATE "products" SET eco_rating = LEAST(GREATEST(COALESCE(eco_rating,0) + %s, 0), 5) WHERE id=%s;', (delta, product_id))
 
         conn.close()
-        return jsonify({"ok": True, "message": "Analyse réussie", "sentiment": polarity}), 200
+        return jsonify({"ok": True, "sentiment": polarity, "delta": float(delta), "pop_norm": float(pop_norm), "afford": float(afford)}), 200
     except Exception as e:
         print("❌ analyze_review error:", e)
         return jsonify({"ok": False, "message": "analyze_review_skipped"}), 200
+
 
 # ---------- Recommend ----------
 @app.route("/recommend", methods=["GET"])

@@ -1,80 +1,75 @@
+// backend/routes/productRoutes.js
 const express = require("express");
-const axios = require("axios");
-const { Product, UserInteraction } = require("../models");
-const productController = require("../controllers/productController");
-const authMiddleware = require("../middlewares/authMiddleware");
-
 const router = express.Router();
 
-// ———————————————————————————————————————————————————————————
-// 🔹 Routes publiques
+const productController = require("../controllers/productController");
+const auth = require("../middlewares/authMiddleware");
 
-// 🔍 Recherche intelligente IA
+const reviewRoutes = require("./reviewRoutes");
+
+// ────────────────────────────────────────────────────────────
+// 🔓 Public product routes (no token required)
+// ────────────────────────────────────────────────────────────
+
+// AI search (NLP + fallback)
 router.get("/search", productController.aiSearch);
 
-// ✅ Afficher tous les produits
+// List products (pagination + text/ID search via ?q= / ?id= / ?ids=)
 router.get("/", productController.getAllProducts);
 
-// Produits populaires (protégé)
-router.get("/popular", authMiddleware, productController.getPopularProducts);
+// ────────────────────────────────────────────────────────────
+// 🔒 Protected routes that must come BEFORE the :id route
+// ────────────────────────────────────────────────────────────
 
-// Voir un produit (protégé)
-router.get("/:id", authMiddleware, async (req, res) => {
+// ✅ Keep popular protected
+router.get("/popular", auth, productController.getPopularProducts);
+
+// Track views (keep protected; make public if you prefer)
+router.post("/:id/view", auth, productController.incrementProductView);
+
+// Reviews
+router.use("/:id/reviews", reviewRoutes);
+
+// Reviews via NLP (protected)
+router.post("/:id/review", auth, async (req, res, next) => {
+  // The review logic is already implemented in your previous routes file;
+  // if you prefer centralizing in controller, move it there and call it here.
   try {
-    const product = await Product.findByPk(req.params.id);
-    if (!product) return res.status(404).json({ error: "Product not found" });
-
-    if (req.user) {
-      await UserInteraction.create({
-        user_id: req.user.id,
-        product_id: product.id,
-        interaction_type: "view"
-      });
-      product.views++;
-      await product.save();
-    }
-
-    res.json(product);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Server error" });
-  }
-});
-
-// Ajouter une review avec NLP
-router.post("/:id/review", authMiddleware, async (req, res) => {
-  try {
+    const axios = require("axios");
     const { review } = req.body;
-    console.log(`📌 Backend: Submitting review for product ${req.params.id}: ${review}`);
-    
-    // Use the Docker service name instead of localhost
-    const response = await axios.post("http://eco-nlp:5001/analyze_review", {
+    if (!review || !review.trim()) {
+      return res.status(400).json({ error: "Review text is required" });
+    }
+    const NLP_API_URL = process.env.NLP_API_URL || "http://127.0.0.1:5001";
+    const response = await axios.post(`${NLP_API_URL}/analyze_review`, {
       product_id: req.params.id,
-      review
+      review,
     });
-    
-    console.log("✅ Backend: NLP response received:", response.data);
     res.json(response.data);
   } catch (err) {
-    console.error("❌ Backend: NLP Error:", err.response?.data || err.message);
-    res.status(500).json({ error: "Failed to analyze review. Please try again." });
+    console.error("❌ NLP error:", err.response?.data || err.message);
+    res.status(500).json({ error: "Failed to analyze review" });
   }
 });
 
-// ———————————————————————————————————————————————————————————
-// 🔒 Routes admin uniquement
+// ────────────────────────────────────────────────────────────
+// 🔓 Public single product route (after special paths above)
+// ────────────────────────────────────────────────────────────
+router.get("/:id", productController.getProductById);
 
+
+// ────────────────────────────────────────────────────────────
+// 🔒 Admin-only writes
+// ────────────────────────────────────────────────────────────
 const requireAdmin = (req, res, next) => {
-  console.log("🔍 ROLE CHECK:", req.user);
   if (req.user?.role !== "admin") {
     return res.status(403).json({ message: "Access denied: admin only" });
   }
   next();
 };
 
-router.post("/", authMiddleware, requireAdmin, productController.createProduct);
-router.put("/:id", authMiddleware, requireAdmin, productController.updateProduct);
-router.delete("/:id", authMiddleware, requireAdmin, productController.deleteProduct);
-router.post("/:id/view", authMiddleware, productController.incrementProductView);
+router.post("/", auth, requireAdmin, productController.createProduct);
+router.put("/:id", auth, requireAdmin, productController.updateProduct);
+router.delete("/:id", auth, requireAdmin, productController.deleteProduct);
 
 module.exports = router;
