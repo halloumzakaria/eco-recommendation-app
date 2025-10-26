@@ -47,11 +47,13 @@ app.get("/api/health", (req, res) => {
   });
 });
 
-// --- Routes “métier” existantes ---
+// --- Routes "métier" existantes ---
 const authRoutes = require("./routes/authRoutes");
 const productRoutes = require("./routes/productRoutes");
+const cartRoutes = require("./routes/cartRoutes");
 app.use("/api/auth", authRoutes);
 app.use("/api/products", productRoutes);
+app.use("/api/cart", cartRoutes);
 
 // ===================================================================
 //                PROXIES → NLP (Flask)  ✅ IMPORTANT

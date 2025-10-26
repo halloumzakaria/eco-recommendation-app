@@ -1,8 +1,8 @@
 import React from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { AppBar, Toolbar, Typography, Button, Chip, Box } from "@mui/material";
+import { AppBar, Toolbar, Typography, Button, Chip, Box, IconButton, Badge } from "@mui/material";
 import { green, purple } from "@mui/material/colors";
-import { AdminPanelSettings, Person } from "@mui/icons-material";
+import { AdminPanelSettings, Person, ShoppingCart } from "@mui/icons-material";
 
 const Navbar = () => {
     const navigate = useNavigate();
@@ -66,6 +66,9 @@ const Navbar = () => {
                                 <Button color="inherit" component={Link} to="/products">Products</Button>
                                 <Button color="inherit" component={Link} to="/search">🔍 AI Search</Button>
                                 <Button color="inherit" component={Link} to="/profile">Profile</Button>
+                                <IconButton color="inherit" component={Link} to="/cart" sx={{ mr: 1 }}>
+                                    <ShoppingCart />
+                                </IconButton>
                                 <Button color="inherit" onClick={handleLogout}>Logout</Button>
                             </>
                         ) : (
@@ -75,6 +78,9 @@ const Navbar = () => {
                                 <Button color="inherit" component={Link} to="/products">Products</Button>
                                 <Button color="inherit" component={Link} to="/search">🔍 AI Search</Button>
                                 <Button color="inherit" component={Link} to="/profile">Profile</Button>
+                                <IconButton color="inherit" component={Link} to="/cart" sx={{ mr: 1 }}>
+                                    <ShoppingCart />
+                                </IconButton>
                                 <Button color="inherit" onClick={handleLogout}>Logout</Button>
                             </>
                         )}

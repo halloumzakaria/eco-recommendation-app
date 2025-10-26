@@ -2,6 +2,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import api from "../utils/api";
+import cartApi from "../utils/cartApi";
 import {
   Box,
   Grid,
@@ -24,11 +25,9 @@ import {
   Alert,
   CircularProgress,
   Pagination,
-  Collapse,
-  IconButton,
 } from "@mui/material";
 import { green } from "@mui/material/colors";
-import { Add, Save, Cancel, FilterList, ExpandMore, ExpandLess } from "@mui/icons-material";
+import { Add, Save, Cancel } from "@mui/icons-material";
 
 // -------------------------------------------------------
 // Image helpers
@@ -109,9 +108,6 @@ const Products = () => {
     category: "",
     sortBy: "relevance",
   });
-
-  // Filter panel visibility
-  const [showFilters, setShowFilters] = useState(false);
 
   // Review dialog
   const [openReview, setOpenReview] = useState(false);
@@ -363,287 +359,114 @@ const Products = () => {
         )}
       </Box>
 
-      {/* Filter Toggle Button */}
-      <Box sx={{ mb: 3, display: "flex", justifyContent: "center" }}>
-        <Button
-          variant="contained"
-          startIcon={<FilterList />}
-          endIcon={showFilters ? <ExpandLess /> : <ExpandMore />}
-          onClick={() => setShowFilters(!showFilters)}
-          sx={{
-            backgroundColor: green[600],
-            color: "white",
-            fontWeight: 600,
-            px: 4,
-            py: 1.5,
-            borderRadius: 3,
-            boxShadow: "0 4px 12px rgba(76, 175, 80, 0.3)",
-            '&:hover': {
-              backgroundColor: green[700],
-              boxShadow: "0 6px 16px rgba(76, 175, 80, 0.4)",
-              transform: "translateY(-1px)",
-            },
-            transition: "all 0.2s ease-in-out",
-          }}
-        >
-          {showFilters ? "Hide Filters" : "Show Filters"}
-        </Button>
-      </Box>
-
-      {/* Collapsible Filters Card */}
-      <Collapse in={showFilters} timeout="auto" unmountOnExit>
-        <Box
-          sx={{
-            mb: 3,
-            p: 3,
-            border: "1px solid #e5e7eb",
-            borderRadius: 3,
-            backgroundColor: "#fff",
-            boxShadow: "0 2px 8px rgba(0,0,0,0.1)",
-          }}
-        >
-          <Typography variant="h6" sx={{ mb: 3, color: green[800], fontWeight: 600, display: "flex", alignItems: "center", gap: 1 }}>
-            🌿 Filter Products
-          </Typography>
-          
-          <Grid container spacing={3}>
-            {/* Price */}
-            <Grid item xs={12} sm={6} md={3}>
-              <Typography variant="subtitle2" sx={{ mb: 2, color: "#374151", fontWeight: 600 }}>
-                Price Range
-              </Typography>
-              <Typography variant="body2" sx={{ mb: 2, color: green[700], fontWeight: 500 }}>
-                ${filters.priceRange[0]} – ${filters.priceRange[1]}
-              </Typography>
-              <Slider
-                value={filters.priceRange}
-                onChange={(_, v) => setFilters((f) => ({ ...f, priceRange: v }))}
-                valueLabelDisplay="auto"
-                min={Math.min(filters.priceRange[0], 0)}
-                max={Math.max(filters.priceRange[1], 200)}
-                sx={{ 
-                  color: green[600],
-                  '& .MuiSlider-thumb': {
-                    backgroundColor: green[600],
-                    border: '2px solid white',
-                    boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
-                  },
-                  '& .MuiSlider-track': {
-                    backgroundColor: green[600],
-                  },
-                  '& .MuiSlider-rail': {
-                    backgroundColor: green[100],
-                  }
-                }}
-              />
-            </Grid>
-
-            {/* Eco Rating */}
-            <Grid item xs={12} sm={6} md={3}>
-              <Typography variant="subtitle2" sx={{ mb: 2, color: "#374151", fontWeight: 600 }}>
-                Eco Rating
-              </Typography>
-              <Typography variant="body2" sx={{ mb: 2, color: green[700], fontWeight: 500 }}>
-                {filters.ecoRatingRange[0]} – {filters.ecoRatingRange[1]} stars
-              </Typography>
-              <Slider
-                value={filters.ecoRatingRange}
-                onChange={(_, v) => setFilters((f) => ({ ...f, ecoRatingRange: v }))}
-                valueLabelDisplay="auto"
-                min={0}
-                max={5}
-                step={0.1}
-                sx={{ 
-                  color: green[600],
-                  '& .MuiSlider-thumb': {
-                    backgroundColor: green[600],
-                    border: '2px solid white',
-                    boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
-                  },
-                  '& .MuiSlider-track': {
-                    backgroundColor: green[600],
-                  },
-                  '& .MuiSlider-rail': {
-                    backgroundColor: green[100],
-                  }
-                }}
-              />
-            </Grid>
-
-            {/* Category */}
-            <Grid item xs={12} sm={6} md={3}>
-              <Typography variant="subtitle2" sx={{ mb: 2, color: "#374151", fontWeight: 600 }}>
-                Category
-              </Typography>
-              <FormControl fullWidth>
-                <Select
-                  label="Category"
-                  value={filters.category}
-                  onChange={(e) => setFilters((f) => ({ ...f, category: e.target.value }))}
-                  sx={{
-                    '& .MuiOutlinedInput-notchedOutline': {
-                      borderColor: green[300],
-                    },
-                    '&:hover .MuiOutlinedInput-notchedOutline': {
-                      borderColor: green[500],
-                    },
-                    '&.Mui-focused .MuiOutlinedInput-notchedOutline': {
-                      borderColor: green[600],
-                    },
-                  }}
-                >
-                  <MenuItem value="">All Categories</MenuItem>
-                  {categories.map((c) => (
-                    <MenuItem key={c} value={c}>
-                      {c.charAt(0).toUpperCase() + c.slice(1)}
-                    </MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
-            </Grid>
-
-            {/* Sort */}
-            <Grid item xs={12} sm={6} md={3}>
-              <Typography variant="subtitle2" sx={{ mb: 2, color: "#374151", fontWeight: 600 }}>
-                Sort By
-              </Typography>
-              <FormControl fullWidth>
-                <Select
-                  label="Sort By"
-                  value={filters.sortBy}
-                  onChange={(e) => setFilters((f) => ({ ...f, sortBy: e.target.value }))}
-                  sx={{
-                    '& .MuiOutlinedInput-notchedOutline': {
-                      borderColor: green[300],
-                    },
-                    '&:hover .MuiOutlinedInput-notchedOutline': {
-                      borderColor: green[500],
-                    },
-                    '&.Mui-focused .MuiOutlinedInput-notchedOutline': {
-                      borderColor: green[600],
-                    },
-                  }}
-                >
-                  <MenuItem value="relevance">Relevance</MenuItem>
-                  <MenuItem value="price-low">Price: Low → High</MenuItem>
-                  <MenuItem value="price-high">Price: High → Low</MenuItem>
-                  <MenuItem value="eco-rating">Eco Rating</MenuItem>
-                  <MenuItem value="name">Name A–Z</MenuItem>
-                </Select>
-              </FormControl>
-            </Grid>
+      {/* Filters Card */}
+      <Box
+        sx={{
+          mb: 3,
+          p: 2.5,
+          border: "1px solid #e5e7eb",
+          borderRadius: 2,
+          backgroundColor: "#fff",
+        }}
+      >
+        <Grid container spacing={2}>
+          {/* Price */}
+          <Grid item xs={12} md={4}>
+            <Typography variant="subtitle2" sx={{ mb: 1, color: "#374151" }}>
+              Price (${filters.priceRange[0]} – ${filters.priceRange[1]})
+            </Typography>
+            <Slider
+              value={filters.priceRange}
+              onChange={(_, v) => setFilters((f) => ({ ...f, priceRange: v }))}
+              valueLabelDisplay="auto"
+              min={Math.min(filters.priceRange[0], 0)}
+              max={Math.max(filters.priceRange[1], 200)}
+              sx={{ mt: 3 }}
+            />
           </Grid>
 
-          {/* Action Buttons */}
-          <Box sx={{ mt: 4, display: "flex", gap: 2, justifyContent: "center", flexWrap: "wrap" }}>
-            <Button
-              variant="outlined"
-              onClick={() => setFilters({ priceRange: [0, 200], ecoRatingRange: [0, 5], category: "", sortBy: "relevance" })}
-              sx={{
-                color: green[700],
-                borderColor: green[300],
-                fontWeight: 600,
-                px: 3,
-                py: 1.5,
-                borderRadius: 2,
-                '&:hover': {
-                  borderColor: green[500],
-                  backgroundColor: green[50],
-                }
-              }}
-            >
-               Clear All Filters
-            </Button>
-            <Button
-              variant="contained"
-              onClick={() => setPage(1)}
-              sx={{
-                backgroundColor: green[600],
-                color: "white",
-                fontWeight: 600,
-                px: 4,
-                py: 1.5,
-                borderRadius: 2,
-                boxShadow: "0 4px 12px rgba(76, 175, 80, 0.3)",
-                '&:hover': {
-                  backgroundColor: green[700],
-                  boxShadow: "0 6px 16px rgba(76, 175, 80, 0.4)",
-                  transform: "translateY(-1px)",
-                },
-                transition: "all 0.2s ease-in-out",
-              }}
-            >
-               Apply Filters
-            </Button>
-          </Box>
+          {/* Eco Rating */}
+          <Grid item xs={12} md={4}>
+            <Typography variant="subtitle2" sx={{ mb: 1, color: "#374151" }}>
+              Eco Rating ({filters.ecoRatingRange[0]} – {filters.ecoRatingRange[1]})
+            </Typography>
+            <Slider
+              value={filters.ecoRatingRange}
+              onChange={(_, v) => setFilters((f) => ({ ...f, ecoRatingRange: v }))}
+              valueLabelDisplay="auto"
+              min={0}
+              max={5}
+              step={0.1}
+              sx={{ mt: 3 }}
+            />
+          </Grid>
 
-          {/* Active filters chips */}
-          <Box sx={{ mt: 3, display: "flex", gap: 1, flexWrap: "wrap", justifyContent: "center" }}>
-            {filters.category && (
-              <Chip
-                label={`Category: ${filters.category}`}
-                onDelete={() => setFilters((f) => ({ ...f, category: "" }))}
-                sx={{
-                  backgroundColor: green[100],
-                  color: green[800],
-                  fontWeight: 500,
-                  '& .MuiChip-deleteIcon': {
-                    color: green[600],
-                  }
-                }}
-              />
-            )}
-            {(filters.sortBy && filters.sortBy !== "relevance") && (
-              <Chip
-                label={`Sort: ${filters.sortBy}`}
-                onDelete={() => setFilters((f) => ({ ...f, sortBy: "relevance" }))}
-                sx={{
-                  backgroundColor: green[100],
-                  color: green[800],
-                  fontWeight: 500,
-                  '& .MuiChip-deleteIcon': {
-                    color: green[600],
-                  }
-                }}
-              />
-            )}
-            {(filters.priceRange[0] > 0 || filters.priceRange[1] < 200) && (
-              <Chip
-                label={`Price: $${filters.priceRange[0]}-$${filters.priceRange[1]}`}
-                onDelete={() => setFilters((f) => ({ ...f, priceRange: [0, 200] }))}
-                sx={{
-                  backgroundColor: green[100],
-                  color: green[800],
-                  fontWeight: 500,
-                  '& .MuiChip-deleteIcon': {
-                    color: green[600],
-                  }
-                }}
-              />
-            )}
-            {(filters.ecoRatingRange[0] > 0 || filters.ecoRatingRange[1] < 5) && (
-              <Chip
-                label={`Eco: ${filters.ecoRatingRange[0]}-${filters.ecoRatingRange[1]} stars`}
-                onDelete={() => setFilters((f) => ({ ...f, ecoRatingRange: [0, 5] }))}
-                sx={{
-                  backgroundColor: green[100],
-                  color: green[800],
-                  fontWeight: 500,
-                  '& .MuiChip-deleteIcon': {
-                    color: green[600],
-                  }
-                }}
-              />
-            )}
-          </Box>
+          {/* Category */}
+          <Grid item xs={12} md={2}>
+            <FormControl fullWidth>
+              <InputLabel>Category</InputLabel>
+              <Select
+                label="Category"
+                value={filters.category}
+                onChange={(e) => setFilters((f) => ({ ...f, category: e.target.value }))}
+              >
+                <MenuItem value="">All</MenuItem>
+                {categories.map((c) => (
+                  <MenuItem key={c} value={c}>
+                    {c}
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+          </Grid>
+
+          {/* Sort */}
+          <Grid item xs={12} md={2}>
+            <FormControl fullWidth>
+              <InputLabel>Sort By</InputLabel>
+              <Select
+                label="Sort By"
+                value={filters.sortBy}
+                onChange={(e) => setFilters((f) => ({ ...f, sortBy: e.target.value }))}
+              >
+                <MenuItem value="relevance">Relevance</MenuItem>
+                <MenuItem value="price-low">Price: Low → High</MenuItem>
+                <MenuItem value="price-high">Price: High → Low</MenuItem>
+                <MenuItem value="eco-rating">Eco Rating</MenuItem>
+                <MenuItem value="name">Name A–Z</MenuItem>
+              </Select>
+            </FormControl>
+          </Grid>
+        </Grid>
+
+        {/* Active filters chips */}
+        <Box sx={{ mt: 2, display: "flex", gap: 1, flexWrap: "wrap" }}>
+          {filters.category && (
+            <Chip
+              label={`Category: ${filters.category}`}
+              onDelete={() => setFilters((f) => ({ ...f, category: "" }))}
+            />
+          )}
+          {(filters.sortBy && filters.sortBy !== "relevance") && (
+            <Chip
+              label={`Sort: ${filters.sortBy}`}
+              onDelete={() => setFilters((f) => ({ ...f, sortBy: "relevance" }))}
+            />
+          )}
         </Box>
-      </Collapse>
+      </Box>
 
-      {/* Status */}
-      <Box sx={{ display: "flex", justifyContent: "flex-start", alignItems: "center", mb: 2 }}>
+      {/* Status + pagination */}
+      <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mb: 2 }}>
         <Typography variant="body1" sx={{ color: green[700] }}>
           {loading ? "Loading…" : `Showing ${pageItems.length} of ${totalFiltered} products`}
         </Typography>
+        <Pagination
+          color="primary"
+          page={page}
+          count={totalPages}
+          onChange={(_e, p) => setPage(p)}
+        />
       </Box>
 
       {/* Grid */}
@@ -692,16 +515,35 @@ const Products = () => {
                   </Typography>
                   <Typography variant="body2">🌟 Eco Rating: {product.eco_rating ?? "—"} / 5</Typography>
 
-                  <Button
-                    variant="contained"
-                    sx={{ mt: 1.5, backgroundColor: green[700], "&:hover": { bgcolor: green[800] } }}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      navigate(`/products/${product.id}#reviews`);
-                    }}
-                  >
-                    Leave a Review
-                  </Button>
+                  <Box sx={{ display: 'flex', gap: 1, mt: 1.5 }}>
+                    <Button
+                      variant="contained"
+                      fullWidth
+                      sx={{ backgroundColor: green[700], "&:hover": { bgcolor: green[800] } }}
+                      onClick={async (e) => {
+                        e.stopPropagation();
+                        try {
+                          await cartApi.addItem(product.id, 1);
+                          alert('Item added to cart!');
+                        } catch (error) {
+                          alert('Failed to add item to cart');
+                        }
+                      }}
+                    >
+                      🛒 Add to Cart
+                    </Button>
+                    <Button
+                      variant="outlined"
+                      fullWidth
+                      sx={{ borderColor: green[700], color: green[700] }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        navigate(`/products/${product.id}#reviews`);
+                      }}
+                    >
+                      Review
+                    </Button>
+                  </Box>
                 </CardContent>
               </Card>
             </Grid>

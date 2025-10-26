@@ -12,6 +12,7 @@ const Dashboard       = lazy(() => import("./pages/Dashboard"));
 const AdminDashboard  = lazy(() => import("./pages/AdminDashboard"));
 const Products        = lazy(() => import("./pages/Products"));
 const ProductDetails  = lazy(() => import("./pages/ProductDetails")); // <— new detail page
+const Cart            = lazy(() => import("./pages/Cart"));
 const Profile         = lazy(() => import("./pages/Profile"));
 const SearchBar       = lazy(() => import("./components/SearchBar"));
 
@@ -59,6 +60,7 @@ const App = () => {
                   <Route path="/admin" element={<AdminDashboard />} />
                   <Route path="/products" element={<Products />} />
                   <Route path="/products/:id" element={<ProductDetails />} /> {/* detail route */}
+                  <Route path="/cart" element={<Cart />} />
                   <Route path="/search" element={<SearchBar />} />
                   <Route path="/profile" element={<Profile />} />
                   <Route path="/dashboard" element={<Navigate to="/admin" replace />} />
@@ -71,6 +73,7 @@ const App = () => {
                   <Route path="/dashboard" element={<Dashboard />} />
                   <Route path="/products" element={<Products />} />
                   <Route path="/products/:id" element={<ProductDetails />} /> {/* detail route */}
+                  <Route path="/cart" element={<Cart />} />
                   <Route path="/search" element={<SearchBar />} />
                   <Route path="/profile" element={<Profile />} />
                   <Route path="/admin" element={<Navigate to="/dashboard" replace />} />
